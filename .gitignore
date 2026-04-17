@@ -53,3 +53,6 @@ next-env.d.ts
 
 # logs
 *.log
+
+# one-time scripts — delete after use
+/scripts/seed-user.ts
