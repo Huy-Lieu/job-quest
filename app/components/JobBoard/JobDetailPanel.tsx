@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -8,8 +9,9 @@ import {
 import type { JobWithScore, SearchSourceName } from '@/lib/types'
 import { SkillSection } from './SkillSection'
 import { FitScoreBadge } from '@/components/ui/FitScoreBadge'
+import { CompanyIntelTab } from './CompanyIntelTab'
 
-//  Constants (copied from jobs/page.tsx) 
+// ─── Constants ───────────────────────────────────────────────────────────────
 
 const SOURCE_LABELS: Record<SearchSourceName, string> = {
   linkedin:        'LinkedIn',
@@ -58,10 +60,10 @@ const SOURCE_COLORS: Record<SearchSourceName, string> = {
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  'full_time':  'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300',
-  'contract':   'bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300',
-  'internship': 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
-  'part_time':  'bg-gray-100 text-gray-700 dark:bg-gray-500/15 dark:text-gray-300',
+  full_time:  'bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300',
+  contract:   'bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300',
+  internship: 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300',
+  part_time:  'bg-gray-100 text-gray-700 dark:bg-gray-500/15 dark:text-gray-300',
 }
 
 const AGE_TONE_STYLES: Record<'hot' | 'fresh' | 'stale' | 'old', string> = {
@@ -71,7 +73,7 @@ const AGE_TONE_STYLES: Record<'hot' | 'fresh' | 'stale' | 'old', string> = {
   old:   'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:border-amber-500/30',
 }
 
-//  Helper functions (copied from jobs/page.tsx) 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function relativeTime(iso: string | null): string {
   if (!iso) return ''
@@ -79,16 +81,16 @@ function relativeTime(iso: string | null): string {
   if (isNaN(then)) return ''
   const diffMs  = Date.now() - then
   const minutes = Math.floor(diffMs / 60_000)
-  if (minutes < 1)    return 'just now'
-  if (minutes < 60)   return `${minutes}m ago`
+  if (minutes < 1)  return 'just now'
+  if (minutes < 60) return `${minutes}m ago`
   const hours = Math.floor(minutes / 60)
-  if (hours < 24)     return `${hours}h ago`
+  if (hours < 24)   return `${hours}h ago`
   const days = Math.floor(hours / 24)
-  if (days < 7)       return `${days}d ago`
+  if (days < 7)     return `${days}d ago`
   const weeks = Math.floor(days / 7)
-  if (weeks < 5)      return `${weeks}w ago`
+  if (weeks < 5)    return `${weeks}w ago`
   const months = Math.floor(days / 30)
-  if (months < 12)    return `${months}mo ago`
+  if (months < 12)  return `${months}mo ago`
   return `${Math.floor(days / 365)}y ago`
 }
 
@@ -117,7 +119,7 @@ function stripHtml(html: string): string {
 function pickBestSource(
   sources: { source_name: SearchSourceName; source_url: string }[] | undefined
 ): { source_name: SearchSourceName; source_url: string } | null {
-  const APPLY_SOURCE_PRIORITY: SearchSourceName[] = [
+  const PRIORITY: SearchSourceName[] = [
     'greenhouse', 'lever', 'ashby', 'workday', 'smartrecruiters', 'workable',
     'teamtailor', 'recruitee', 'personio', 'career_page',
     'linkedin', 'wellfound', 'glassdoor', 'indeed', 'ziprecruiter',
@@ -126,42 +128,46 @@ function pickBestSource(
   if (!sources || sources.length === 0) return null
   const withUrl = sources.filter((s) => s.source_url && s.source_url.length > 0)
   const pool = withUrl.length > 0 ? withUrl : sources
-  const byPriority = [...pool].sort((a, b) => {
-    const ai = APPLY_SOURCE_PRIORITY.indexOf(a.source_name)
-    const bi = APPLY_SOURCE_PRIORITY.indexOf(b.source_name)
+  return [...pool].sort((a, b) => {
+    const ai = PRIORITY.indexOf(a.source_name)
+    const bi = PRIORITY.indexOf(b.source_name)
     return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
-  })
-  return byPriority[0] ?? null
+  })[0] ?? null
 }
 
 function googleSearchUrl(company: string, title: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(`${company} ${title} apply`)}`
 }
 
-//  Component 
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Tab = 'details' | 'company'
 
 interface JobDetailPanelProps {
-  job: JobWithScore
+  job:      JobWithScore
   onDelete: (id: string) => void
   onClose?: () => void
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export function JobDetailPanel({ job, onDelete, onClose }: JobDetailPanelProps) {
-  const score = job.job_scores?.[0]
-  const meta = job.metadata ?? null
-  const viaSource = pickBestSource(job.job_sources)
-  const applyUrl = viaSource?.source_url || null
-  const fallback = applyUrl ? null : googleSearchUrl(job.company, job.canonical_title)
-  const age = postingAgePill(job.posted_at ?? job.scraped_at)
+  const [activeTab, setActiveTab] = useState<Tab>('details')
+
+  const score       = job.job_scores?.[0]
+  const meta        = job.metadata ?? null
+  const viaSource   = pickBestSource(job.job_sources)
+  const applyUrl    = viaSource?.source_url || null
+  const fallback    = applyUrl ? null : googleSearchUrl(job.company, job.canonical_title)
+  const age         = postingAgePill(job.posted_at ?? job.scraped_at)
   const ageFallback = !job.posted_at
-  const salaryText = job.salary_min
-    ? `$${fmt(job.salary_min)}${job.salary_max ? `  $${fmt(job.salary_max)}` : '+'}`
+  const salaryText  = job.salary_min
+    ? '$' + fmt(job.salary_min) + (job.salary_max ? '\u2013$' + fmt(job.salary_max) : '+')
     : null
-  const descClean = job.description ? stripHtml(job.description) : ''
+  const descClean   = job.description ? stripHtml(job.description) : ''
   const sponsor: 'Yes' | 'No' | 'Unknown' =
     job.visa_sponsorship === 'yes' ? 'Yes' :
-    job.visa_sponsorship === 'no'  ? 'No'  :
-                                     'Unknown'
+    job.visa_sponsorship === 'no'  ? 'No'  : 'Unknown'
   const hasRequirements = !!(
     job.seniority_level ||
     meta?.years_required != null ||
@@ -170,11 +176,15 @@ export function JobDetailPanel({ job, onDelete, onClose }: JobDetailPanelProps) 
     meta?.applicant_count != null ||
     job.visa_sponsorship
   )
+  const roleAlignment = (job as JobWithScore & { role_alignment?: string | null }).role_alignment ?? null
+
 
   return (
     <div className="flex flex-col h-full">
+
       {/* Sticky header */}
       <div className="flex-shrink-0 border-b px-5 py-4 space-y-3 bg-background">
+
         {onClose && (
           <button
             onClick={onClose}
@@ -183,6 +193,7 @@ export function JobDetailPanel({ job, onDelete, onClose }: JobDetailPanelProps) 
             <ChevronUp className="h-3.5 w-3.5 -rotate-90" /> Back to list
           </button>
         )}
+
         <div>
           <p className="text-sm text-muted-foreground">{job.company}</p>
           <h2 className="text-xl font-bold leading-tight mt-0.5">{job.canonical_title}</h2>
@@ -255,99 +266,146 @@ export function JobDetailPanel({ job, onDelete, onClose }: JobDetailPanelProps) 
             <Trash2 className="h-4 w-4" /> Delete
           </Button>
         </div>
+
+        {/* Tab bar */}
+        <div className="flex -mx-5 px-5 gap-0">
+          {(['details', 'company'] as Tab[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === tab
+                  ? 'border-primary text-foreground'
+                  : 'border-transparent text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {tab === 'details' ? 'Job Details' : 'Company Intel'}
+            </button>
+          ))}
+        </div>
+
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
-        {score?.fit_reason && (
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Fit analysis</h3>
-            <p className="text-sm text-foreground leading-relaxed">{score.fit_reason}</p>
-            {score.skills_matched?.length > 0 && (
-              <div className="mt-3">
-                <p className="text-xs font-medium text-green-700 dark:text-green-400 mb-1">Matched</p>
-                <div className="flex flex-wrap gap-1">
-                  {score.skills_matched.map((s) => (
-                    <span key={s} className="text-xs bg-green-50 text-green-700 border border-green-200 dark:bg-green-500/10 dark:text-green-300 dark:border-green-500/30 rounded-full px-2 py-0.5">{s}</span>
+      <div className="flex-1 overflow-y-auto">
+
+        {/* Job Details tab */}
+        {activeTab === 'details' && (
+          <div className="px-5 py-5 space-y-5">
+
+            {score?.fit_reason && (
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Fit analysis</h3>
+                <p className="text-sm text-foreground leading-relaxed">{score.fit_reason}</p>
+                {score.skills_matched?.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-green-700 dark:text-green-400 mb-1">Matched</p>
+                    <div className="flex flex-wrap gap-1">
+                      {score.skills_matched.map((s) => (
+                        <span key={s} className="text-xs bg-green-50 text-green-700 border border-green-200 dark:bg-green-500/10 dark:text-green-300 dark:border-green-500/30 rounded-full px-2 py-0.5">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {score.skills_missing?.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Gaps</p>
+                    <div className="flex flex-wrap gap-1">
+                      {score.skills_missing.map((s) => (
+                        <span key={s} className="text-xs bg-red-50 text-red-600 border border-red-200 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/30 rounded-full px-2 py-0.5">
+                          {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {hasRequirements && (
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Requirements &amp; context</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {job.seniority_level && job.seniority_level !== 'unknown' && (
+                    <Badge variant="outline" className="text-xs capitalize">{job.seniority_level}</Badge>
+                  )}
+                  {meta?.years_required != null && (
+                    <Badge variant="outline" className="text-xs">{meta.years_required}+ yrs</Badge>
+                  )}
+                  <Badge
+                    variant="outline"
+                    className={`text-xs ${
+                      sponsor === 'Yes' ? 'text-blue-700 border-blue-300 dark:text-blue-300 dark:border-blue-500/40' :
+                      sponsor === 'No'  ? 'text-red-700 border-red-300 dark:text-red-300 dark:border-red-500/40' :
+                                          'text-muted-foreground'
+                    }`}
+                  >
+                    Visa: {sponsor}
+                  </Badge>
+                  {job.benefits_highlights?.map((b) => (
+                    <Badge key={b} variant="outline" className="text-xs capitalize">{b}</Badge>
+                  ))}
+                  {meta?.applicant_count != null && (
+                    <Badge variant="outline" className="text-xs">{meta.applicant_count} applicants</Badge>
+                  )}
+                </div>
+                <SkillSection title="Detected skills" skills={job.skills_required ?? []} variant="tech" />
+              </div>
+            )}
+
+            {descClean && (
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">About the role</h3>
+                <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{descClean}</p>
+              </div>
+            )}
+
+            {job.job_sources && job.job_sources.length > 1 && (
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Also posted on</h3>
+                <div className="flex flex-wrap gap-1.5">
+                  {job.job_sources.map((s) => (
+                    <a
+                      key={s.source_name}
+                      href={s.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`text-xs px-2 py-0.5 rounded font-medium hover:opacity-80 ${SOURCE_COLORS[s.source_name] ?? 'bg-gray-100 text-gray-600'}`}
+                    >
+                      {SOURCE_LABELS[s.source_name] ?? s.source_name}
+                    </a>
                   ))}
                 </div>
               </div>
             )}
-            {score.skills_missing?.length > 0 && (
-              <div className="mt-2">
-                <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Gaps</p>
-                <div className="flex flex-wrap gap-1">
-                  {score.skills_missing.map((s) => (
-                    <span key={s} className="text-xs bg-red-50 text-red-600 border border-red-200 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/30 rounded-full px-2 py-0.5">{s}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
-        {hasRequirements && (
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Requirements &amp; context</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {job.seniority_level && job.seniority_level !== 'unknown' && <Badge variant="outline" className="text-xs capitalize">{job.seniority_level}</Badge>}
-              {meta?.years_required != null && <Badge variant="outline" className="text-xs">{meta.years_required}+ yrs</Badge>}
-              <Badge variant="outline" className={`text-xs ${
-                sponsor === 'Yes' ? 'text-blue-700 border-blue-300 dark:text-blue-300 dark:border-blue-500/40' :
-                sponsor === 'No'  ? 'text-red-700 border-red-300 dark:text-red-300 dark:border-red-500/40' :
-                                    'text-muted-foreground'
-              }`}>
-                Visa: {sponsor}
-              </Badge>
-              {job.benefits_highlights?.map((b) => (
-                <Badge key={b} variant="outline" className="text-xs capitalize">{b}</Badge>
-              ))}
-              {meta?.applicant_count != null && (
-                <Badge variant="outline" className="text-xs">{meta.applicant_count} applicants</Badge>
-              )}
-            </div>
-            <SkillSection title="Detected skills" skills={job.skills_required ?? []} variant="tech" />
-          </div>
-        )}
-
-        {descClean && (
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">About the role</h3>
-            <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">{descClean}</p>
-          </div>
-        )}
-
-        {job.job_sources && job.job_sources.length > 1 && (
-          <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Also posted on</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {job.job_sources.map((s) => (
+            {applyUrl && (
+              <div className="pt-2">
                 <a
-                  key={s.source_name}
-                  href={s.source_url}
+                  href={applyUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={`text-xs px-2 py-0.5 rounded font-medium hover:opacity-80 ${SOURCE_COLORS[s.source_name] ?? 'bg-gray-100 text-gray-600'}`}
+                  className="text-xs text-primary underline"
                 >
-                  {SOURCE_LABELS[s.source_name] ?? s.source_name}
+                  View original posting
                 </a>
-              ))}
-            </div>
+              </div>
+            )}
+
           </div>
         )}
 
-        {applyUrl && (
-          <div className="pt-2">
-            <a
-              href={applyUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-primary underline"
-            >
-              View original posting {'->'}
-            </a>
-          </div>
+        {/* Company Intel tab */}
+        {activeTab === 'company' && (
+          <CompanyIntelTab
+            companyName={job.company}
+            jobId={job.id}
+            roleAlignment={roleAlignment}
+          />
         )}
+
       </div>
     </div>
   )
