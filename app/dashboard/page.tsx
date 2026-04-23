@@ -1,18 +1,35 @@
 import { getServerSession } from 'next-auth'
+import Link from 'next/link'
 import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
-import { Briefcase, Send, CalendarCheck, Trophy, Flame, Star } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { StatCard } from '@/components/dashboard/StatCard'
+import { FitScoreBadge } from '@/components/ui/FitScoreBadge'
+import { Briefcase, Send, CalendarCheck, Trophy, Flame, Star, ArrowRight } from 'lucide-react'
+
+interface RecentJob {
+  id: string
+  canonical_title: string
+  company: string
+  job_scores: { fit_score: number | null }[] | null
+}
 
 async function getUserStats(userId: string) {
-  const [{ data: user }, { count: totalApps }, { count: interviews }, { count: offers }] =
+  const [{ data: user }, { count: totalApps }, { count: interviews }, { count: offers }, { data: recentJobs }] =
     await Promise.all([
       supabaseAdmin.from('users').select('name, xp, level, streak_days').eq('id', userId).single(),
       supabaseAdmin.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', userId),
       supabaseAdmin.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'interview'),
       supabaseAdmin.from('applications').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('status', 'offer'),
+      supabaseAdmin
+        .from('jobs')
+        .select('id, canonical_title, company, job_scores(fit_score)')
+        .eq('user_id', userId)
+        .order('scraped_at', { ascending: false })
+        .limit(5),
     ])
 
   return {
@@ -20,38 +37,24 @@ async function getUserStats(userId: string) {
     totalApps: totalApps ?? 0,
     interviews: interviews ?? 0,
     offers: offers ?? 0,
+    recentJobs: (recentJobs ?? []) as RecentJob[],
   }
 }
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions)
-  const { user, totalApps, interviews, offers } = await getUserStats(session!.user.id)
+  const { user, totalApps, interviews, offers, recentJobs } = await getUserStats(session!.user.id)
 
   const xpForNextLevel = (user?.level ?? 1) * 100
   const xpProgress = Math.min(((user?.xp ?? 0) / xpForNextLevel) * 100, 100)
 
   const stats = [
-    {
-      title: 'Total Applications',
-      value: totalApps,
-      icon: Send,
-      description: 'jobs applied to',
-    },
-    {
-      title: 'Interviews',
-      value: interviews,
-      icon: CalendarCheck,
-      description: 'scheduled or completed',
-    },
-    {
-      title: 'Offers',
-      value: offers,
-      icon: Briefcase,
-      description: 'received so far',
-    },
+    { title: 'Total Applications', value: totalApps,   icon: Send,          description: 'jobs applied to' },
+    { title: 'Interviews',         value: interviews,   icon: CalendarCheck, description: 'scheduled or completed' },
+    { title: 'Offers',             value: offers,       icon: Briefcase,     description: 'received so far' },
     {
       title: 'Success Rate',
-      value: totalApps > 0 ? `${Math.round((offers / totalApps) * 100)}%` : '—',
+      value: totalApps > 0 ? `${Math.round((offers / totalApps) * 100)}%` : '--',
       icon: Trophy,
       description: 'offer / application ratio',
     },
@@ -59,31 +62,18 @@ export default async function DashboardPage() {
 
   return (
     <div className="p-8 space-y-8">
-      {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold">Welcome back, {user?.name ?? 'there'} 👋</h2>
+        <h2 className="text-2xl font-bold">Welcome back, {user?.name ?? 'there'}!</h2>
         <p className="text-muted-foreground mt-1">Here&apos;s your job search overview.</p>
       </div>
 
-      {/* Stats grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map(({ title, value, icon: Icon, description }) => (
-          <Card key={title}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-              <Icon className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{value}</div>
-              <p className="text-xs text-muted-foreground mt-1">{description}</p>
-            </CardContent>
-          </Card>
+        {stats.map(({ title, value, icon, description }) => (
+          <StatCard key={title} title={title} value={value} icon={icon} description={description} />
         ))}
       </div>
 
-      {/* Gamification */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* XP / Level */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -100,7 +90,6 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
 
-        {/* Streak */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -113,7 +102,7 @@ export default async function DashboardPage() {
               <span className="text-3xl font-bold">{user?.streak_days ?? 0}</span>
               <span className="text-muted-foreground mb-1">days</span>
               {(user?.streak_days ?? 0) >= 3 && (
-                <Badge variant="secondary" className="mb-1">🔥 On fire!</Badge>
+                <Badge variant="secondary" className="mb-1">On fire!</Badge>
               )}
             </div>
             <p className="text-xs text-muted-foreground mt-1">Keep applying daily to maintain your streak</p>
@@ -121,11 +110,55 @@ export default async function DashboardPage() {
         </Card>
       </div>
 
-      {/* Empty state for new users */}
+      <div className="flex gap-4">
+        <Link href="/dashboard/jobs" className="flex-1">
+          <Button className="w-full" size="lg">Search Jobs</Button>
+        </Link>
+        <Link href="/dashboard/resume" className="flex-1">
+          <Button className="w-full" size="lg" variant="outline">Analyze Resume</Button>
+        </Link>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold mb-4">Recent Job Matches</h3>
+        {recentJobs.length > 0 ? (
+          <Card>
+            <CardContent className="divide-y p-0">
+              {recentJobs.map((job) => {
+                const fitScore = job.job_scores?.[0]?.fit_score ?? null
+                return (
+                  <Link
+                    key={job.id}
+                    href="/dashboard/jobs"
+                    className="flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium truncate">{job.canonical_title}</p>
+                      <p className="text-sm text-muted-foreground">{job.company}</p>
+                    </div>
+                    <div className="flex items-center gap-3 ml-4 flex-shrink-0">
+                      <FitScoreBadge score={fitScore} />
+                      <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  </Link>
+                )
+              })}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-8 text-center">
+              <Briefcase className="h-8 w-8 text-muted-foreground mb-3 opacity-50" />
+              <p className="text-sm text-muted-foreground">No jobs found yet. Run a search to get started.</p>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
       {totalApps === 0 && (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-            <Briefcase className="h-10 w-10 text-muted-foreground mb-4" />
+            <Briefcase className="h-10 w-10 text-muted-foreground mb-4 opacity-50" />
             <h3 className="font-semibold text-lg">No applications yet</h3>
             <p className="text-muted-foreground text-sm mt-1">
               Start tracking your job applications to see your stats here.

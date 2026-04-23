@@ -56,3 +56,6 @@ next-env.d.ts
 
 # one-time scripts — delete after use
 /scripts/seed-user.ts
+
+# docx
+*.docx

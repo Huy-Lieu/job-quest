@@ -1,0 +1,519 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { ResumeVersion, Job, AnalysisResult } from '@/lib/types'
+import { Plus, X, Trash2, Star, FileText, Sparkles, ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
+
+type AnalysisTab = 'job' | 'company' | 'gap' | 'resume' | 'prep' | 'cover'
+type ResumeMode = 'conservative' | 'aggressive'
+
+function MarkdownBlock({ text }: { text: string }) {
+  const lines = text.split('\n')
+  return (
+    <div className="text-sm space-y-1">
+      {lines.map((line, i) => {
+        if (line.startsWith('### ')) return <h3 key={i} className="font-bold text-base mt-3 mb-1">{line.slice(4)}</h3>
+        if (line.startsWith('## ')) return <h2 key={i} className="font-bold text-lg mt-4 mb-1">{line.slice(3)}</h2>
+        if (line.startsWith('# ')) return <h1 key={i} className="font-bold text-xl mt-4 mb-1">{line.slice(2)}</h1>
+        if (line.startsWith('- ') || line.startsWith('* ')) return <p key={i} className="pl-4">&bull; {line.slice(2)}</p>
+        if (line.match(/^\d+\.\s/)) return <p key={i} className="pl-4">{line}</p>
+        if (line.trim() === '') return <div key={i} className="h-1" />
+        const parts = line.split(/\*\*(.*?)\*\*/g)
+        if (parts.length > 1) {
+          return (
+            <p key={i}>
+              {parts.map((p, j) => j % 2 === 1 ? <strong key={j}>{p}</strong> : p)}
+            </p>
+          )
+        }
+        return <p key={i}>{line}</p>
+      })}
+    </div>
+  )
+}
+
+const STEPS = [
+  { id: 'job',     label: 'Analyzing job description...' },
+  { id: 'company', label: 'Researching company news...' },
+  { id: 'gap',     label: 'Comparing resume to role...' },
+  { id: 'resume',  label: 'Tailoring resume (x2 modes)...' },
+  { id: 'prep',    label: 'Building interview briefing...' },
+  { id: 'cover',   label: 'Writing cover letter...' },
+  { id: 'done',    label: 'Done\!' },
+]
+
+export default function ResumePage() {
+  const [masters, setMasters] = useState<ResumeVersion[]>([])
+  const [versions, setVersions] = useState<ResumeVersion[]>([])
+  const [flaggedJobs, setFlaggedJobs] = useState<Job[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [showMasterModal, setShowMasterModal] = useState(false)
+  const [editingMaster, setEditingMaster] = useState<ResumeVersion | null>(null)
+  const [masterForm, setMasterForm] = useState({ variant_name: '', content: '', make_default: false })
+  const [savingMaster, setSavingMaster] = useState(false)
+
+  const [showAnalyzeModal, setShowAnalyzeModal] = useState(false)
+  const [analyzeForm, setAnalyzeForm] = useState({
+    masterId: '',
+    jobInputMode: 'paste' as 'paste' | 'flagged',
+    jobDescription: '',
+    selectedJobId: '',
+    runCompanySearch: true,
+    companySearchQuery: '',
+  })
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzeStep, setAnalyzeStep] = useState(0)
+
+  const [results, setResults] = useState<AnalysisResult | null>(null)
+  const [activeTab, setActiveTab] = useState<AnalysisTab>('job')
+  const [resumeMode, setResumeMode] = useState<ResumeMode>('conservative')
+  const [expandedVersion, setExpandedVersion] = useState<string | null>(null)
+
+  useEffect(() => { fetchAll() }, [])
+
+  useEffect(() => {
+    if (analyzeForm.jobInputMode === 'paste' && analyzeForm.jobDescription) {
+      const match =
+        analyzeForm.jobDescription.match(/(?:at|@)\s+([A-Z][a-zA-Z\s&,.']+?)(?:\n|,|\.|--|-)/)  ??
+        analyzeForm.jobDescription.match(/^([A-Z][a-zA-Z\s&]+?)(?:\n|is hiring|seeks)/)
+      if (match) {
+        const company = match[1].trim()
+        setAnalyzeForm(f => ({ ...f, companySearchQuery: `"${company}" news 2025 OR 2026` }))
+      }
+    }
+  }, [analyzeForm.jobDescription])
+
+  useEffect(() => {
+    if (analyzeForm.jobInputMode === 'flagged' && analyzeForm.selectedJobId) {
+      const job = flaggedJobs.find(j => j.id === analyzeForm.selectedJobId)
+      if (job) {
+        setAnalyzeForm(f => ({
+          ...f,
+          companySearchQuery: `"${job.company}" news 2025 OR 2026`,
+          jobDescription: job.description ?? '',
+        }))
+      }
+    }
+  }, [analyzeForm.selectedJobId, analyzeForm.jobInputMode])
+
+  useEffect(() => {
+    if (showAnalyzeModal && masters.length > 0) {
+      const defaultMaster = masters.find(m => m.is_default) ?? masters[0]
+      setAnalyzeForm(f => ({ ...f, masterId: defaultMaster.id }))
+    }
+  }, [showAnalyzeModal, masters])
+
+  async function fetchAll() {
+    setLoading(true)
+    const [mastersRes, versionsRes, jobsRes] = await Promise.all([
+      fetch('/api/resume/masters'),
+      fetch('/api/resume/versions'),
+      fetch('/api/jobs?flag=flag&limit=50'),
+    ])
+    const [mastersData, versionsData, jobsData] = await Promise.all([
+      mastersRes.json(),
+      versionsRes.json(),
+      jobsRes.json(),
+    ])
+    if (mastersRes.ok) setMasters(mastersData)
+    if (versionsRes.ok) setVersions(versionsData)
+    if (jobsRes.ok) setFlaggedJobs(jobsData)
+    setLoading(false)
+  }
+
+  async function handleSaveMaster(e: React.FormEvent) {
+    e.preventDefault()
+    setSavingMaster(true)
+    if (editingMaster) {
+      const res = await fetch(`/api/resume/masters/${editingMaster.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          variant_name: masterForm.variant_name,
+          content: masterForm.content,
+          ...(masterForm.make_default ? { is_default: true } : {}),
+        }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setMasters(prev => prev.map(m => {
+          if (masterForm.make_default) return m.id === editingMaster.id ? { ...data } : { ...m, is_default: false }
+          return m.id === editingMaster.id ? data : m
+        }))
+        toast.success('Resume updated')
+        closeMasterModal()
+      } else {
+        toast.error(data.error)
+      }
+    } else {
+      const res = await fetch('/api/resume/masters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(masterForm),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setMasters(prev => {
+          const updated = masterForm.make_default ? prev.map(m => ({ ...m, is_default: false })) : prev
+          return [...updated, data]
+        })
+        toast.success('Master resume saved')
+        closeMasterModal()
+      } else {
+        toast.error(data.error)
+      }
+    }
+    setSavingMaster(false)
+  }
+
+  async function handleSetDefault(id: string) {
+    const res = await fetch(`/api/resume/masters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_default: true }),
+    })
+    if (res.ok) {
+      setMasters(prev => prev.map(m => ({ ...m, is_default: m.id === id })))
+      toast.success('Default resume set')
+    }
+  }
+
+  async function handleDeleteMaster(id: string) {
+    if (\!confirm('Delete this master resume?')) return
+    const res = await fetch(`/api/resume/masters/${id}`, { method: 'DELETE' })
+    if (res.ok) setMasters(prev => prev.filter(m => m.id \!== id))
+  }
+
+  function openEditMaster(master: ResumeVersion) {
+    setEditingMaster(master)
+    setMasterForm({ variant_name: master.variant_name ?? '', content: master.content ?? '', make_default: master.is_default })
+    setShowMasterModal(true)
+  }
+
+  function closeMasterModal() {
+    setShowMasterModal(false)
+    setEditingMaster(null)
+    setMasterForm({ variant_name: '', content: '', make_default: false })
+  }
+
+  async function handleRunAnalysis(e: React.FormEvent) {
+    e.preventDefault()
+    if (\!analyzeForm.masterId) { toast.error('Please select a master resume'); return }
+    const jd = analyzeForm.jobInputMode === 'paste'
+      ? analyzeForm.jobDescription
+      : flaggedJobs.find(j => j.id === analyzeForm.selectedJobId)?.description ?? ''
+    if (\!jd.trim()) { toast.error('Please provide a job description'); return }
+
+    setAnalyzing(true)
+    setResults(null)
+    setAnalyzeStep(0)
+
+    const stepInterval = setInterval(() => {
+      setAnalyzeStep(prev => {
+        const maxStep = analyzeForm.runCompanySearch ? 5 : 4
+        return prev < maxStep ? prev + 1 : prev
+      })
+    }, 5000)
+
+    const res = await fetch('/api/resume/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        masterId: analyzeForm.masterId,
+        jobDescription: jd,
+        jobId: analyzeForm.jobInputMode === 'flagged' ? analyzeForm.selectedJobId : null,
+        runCompanySearch: analyzeForm.runCompanySearch,
+        companySearchQuery: analyzeForm.runCompanySearch ? analyzeForm.companySearchQuery : null,
+      }),
+    })
+
+    clearInterval(stepInterval)
+    setAnalyzeStep(STEPS.length - 1)
+    setAnalyzing(false)
+
+    const data = await res.json()
+    if (res.ok) {
+      setResults(data)
+      setActiveTab('job')
+      setShowAnalyzeModal(false)
+      await fetchAll()
+      toast.success('Analysis complete\!')
+    } else {
+      toast.error(data.error ?? 'Analysis failed')
+    }
+  }
+
+  const TABS: { id: AnalysisTab; label: string; hidden?: boolean }[] = [
+    { id: 'job',     label: 'Job Breakdown' },
+    { id: 'company', label: 'Company Intel', hidden: \!results?.companyIntel },
+    { id: 'gap',     label: `Gap Analysis - ${results?.atsScore ?? '--'}/100` },
+    { id: 'resume',  label: 'Tailored Resume' },
+    { id: 'prep',    label: 'Prep Briefing' },
+    { id: 'cover',   label: 'Cover Letter' },
+  ]
+
+  return (
+    <div className="p-8 space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Resume</h2>
+          <p className="text-muted-foreground mt-1">Manage master resumes and generate AI-tailored versions</p>
+        </div>
+        <Button onClick={() => setShowAnalyzeModal(true)} disabled={masters.length === 0} className="gap-2">
+          <Sparkles className="h-4 w-4" /> Analyze a Job
+        </Button>
+      </div>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Master Resumes</h3>
+          <Button variant="outline" size="sm" onClick={() => setShowMasterModal(true)} className="gap-1">
+            <Plus className="h-3 w-3" /> Add Master
+          </Button>
+        </div>
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        ) : masters.length === 0 ? (
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-8 text-center">
+              <FileText className="h-8 w-8 text-muted-foreground mb-2" />
+              <p className="font-medium text-sm">No master resumes yet</p>
+              <p className="text-xs text-muted-foreground mt-1">Add a master resume to start analyzing jobs</p>
+              <Button variant="outline" size="sm" onClick={() => setShowMasterModal(true)} className="mt-3 gap-1">
+                <Plus className="h-3 w-3" /> Add Master Resume
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {masters.map((m) => (
+              <Card key={m.id} className={`transition-shadow hover:shadow-sm ${m.is_default ? 'ring-2 ring-primary' : ''}`}>
+                <CardContent className="py-4 px-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                      <p className="font-medium text-sm truncate">{m.variant_name}</p>
+                    </div>
+                    {m.is_default && <Badge variant="secondary" className="text-xs flex-shrink-0">Default</Badge>}
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-2">{m.content?.slice(0, 120)}...</p>
+                  <div className="flex items-center gap-2 pt-1">
+                    {\!m.is_default && (
+                      <button onClick={() => handleSetDefault(m.id)} className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
+                        <Star className="h-3 w-3" /> Set default
+                      </button>
+                    )}
+                    <button onClick={() => openEditMaster(m)} className="text-xs text-muted-foreground hover:text-foreground ml-auto">Edit</button>
+                    <button onClick={() => handleDeleteMaster(m.id)} className="text-muted-foreground hover:text-destructive">
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {results && (
+        <section className="space-y-4">
+          <h3 className="font-semibold text-base">Latest Analysis</h3>
+          <div className="flex items-center gap-4 p-4 rounded-lg bg-muted/50">
+            <div className="text-center flex-shrink-0">
+              <p className="text-3xl font-bold">{results.atsScore}</p>
+              <p className="text-xs text-muted-foreground">ATS Score</p>
+            </div>
+            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${results.atsScore >= 70 ? 'bg-green-500' : results.atsScore >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                style={{ width: `${results.atsScore}%` }}
+              />
+            </div>
+            <p className="text-sm text-muted-foreground flex-shrink-0">
+              {results.atsScore >= 70 ? 'Strong match' : results.atsScore >= 50 ? 'Decent match' : 'Needs work'}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-1 border-b pb-2">
+            {TABS.filter(t => \!t.hidden).map(t => (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${activeTab === t.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <Card>
+            <CardContent className="p-5">
+              {activeTab === 'job' && <MarkdownBlock text={results.jobAnalysis} />}
+              {activeTab === 'company' && results.companyIntel && <MarkdownBlock text={results.companyIntel} />}
+              {activeTab === 'gap' && <MarkdownBlock text={results.gapAnalysis} />}
+              {activeTab === 'resume' && (
+                <div className="space-y-3">
+                  <div className="flex gap-2 items-center">
+                    <button onClick={() => setResumeMode('conservative')} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${resumeMode === 'conservative' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Conservative</button>
+                    <button onClick={() => setResumeMode('aggressive')} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${resumeMode === 'aggressive' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Aggressive</button>
+                    <button onClick={() => { navigator.clipboard.writeText(resumeMode === 'conservative' ? results.tailoredConservative : results.tailoredAggressive); toast.success('Copied to clipboard') }} className="ml-auto text-xs text-muted-foreground hover:text-foreground px-2">Copy</button>
+                  </div>
+                  <pre className="text-xs whitespace-pre-wrap font-mono bg-muted/30 rounded p-3 max-h-[500px] overflow-y-auto">
+                    {resumeMode === 'conservative' ? results.tailoredConservative : results.tailoredAggressive}
+                  </pre>
+                </div>
+              )}
+              {activeTab === 'prep' && <MarkdownBlock text={results.prepBriefing} />}
+              {activeTab === 'cover' && (
+                <div className="space-y-3">
+                  <button onClick={() => { navigator.clipboard.writeText(results.coverLetter); toast.success('Copied to clipboard') }} className="text-xs text-muted-foreground hover:text-foreground">Copy</button>
+                  <pre className="text-sm whitespace-pre-wrap leading-relaxed">{results.coverLetter}</pre>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
+      {versions.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="font-semibold text-base">Past Analyses</h3>
+          <div className="space-y-2">
+            {versions.map((v) => (
+              <Card key={v.id} className="hover:shadow-sm transition-shadow">
+                <CardContent className="py-3 px-4">
+                  <button className="w-full flex items-center justify-between text-left" onClick={() => setExpandedVersion(expandedVersion === v.id ? null : v.id)}>
+                    <div className="flex items-center gap-3">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
+                      <div>
+                        <p className="text-sm font-medium">{v.variant_name}</p>
+                        {v.job && <p className="text-xs text-muted-foreground">{v.job.title} &middot; {v.job.company}</p>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {v.ats_score \!== null && <Badge variant="outline" className="text-xs">{v.ats_score}/100</Badge>}
+                      <p className="text-xs text-muted-foreground">{new Date(v.created_at).toLocaleDateString()}</p>
+                      {expandedVersion === v.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </div>
+                  </button>
+                  {expandedVersion === v.id && v.content && (
+                    <pre className="mt-3 text-xs whitespace-pre-wrap font-mono bg-muted/30 rounded p-3 max-h-[300px] overflow-y-auto">{v.content}</pre>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {showMasterModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <CardHeader className="flex flex-row items-center justify-between pb-4 flex-shrink-0">
+              <CardTitle>{editingMaster ? 'Edit Master Resume' : 'Add Master Resume'}</CardTitle>
+              <button onClick={closeMasterModal} className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
+            </CardHeader>
+            <form onSubmit={handleSaveMaster} className="flex flex-col flex-1 overflow-hidden">
+              <CardContent className="space-y-4 overflow-y-auto flex-1">
+                <div className="space-y-1">
+                  <Label>Name *</Label>
+                  <Input required value={masterForm.variant_name} onChange={(e) => setMasterForm({ ...masterForm, variant_name: e.target.value })} placeholder="e.g. Software Engineering, PhD Applications" />
+                </div>
+                <div className="space-y-1">
+                  <Label>Resume Content *</Label>
+                  <textarea required value={masterForm.content} onChange={(e) => setMasterForm({ ...masterForm, content: e.target.value })} placeholder="Paste your full resume text here..." className="w-full border rounded-md px-3 py-2 text-sm bg-background min-h-[300px] resize-y font-mono" />
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={masterForm.make_default} onChange={(e) => setMasterForm({ ...masterForm, make_default: e.target.checked })} />
+                  <span className="text-sm">Set as default master resume</span>
+                </label>
+                <Button type="submit" className="w-full" disabled={savingMaster}>
+                  {savingMaster ? 'Saving...' : editingMaster ? 'Save Changes' : 'Add Master Resume'}
+                </Button>
+              </CardContent>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {showAnalyzeModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <CardHeader className="flex flex-row items-center justify-between pb-4 flex-shrink-0">
+              <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> Analyze a Job</CardTitle>
+              <button onClick={() => \!analyzing && setShowAnalyzeModal(false)} className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
+            </CardHeader>
+            {analyzing ? (
+              <CardContent className="py-12 flex flex-col items-center gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <div className="space-y-2 w-full max-w-sm">
+                  {STEPS.filter(s => s.id \!== 'company' || analyzeForm.runCompanySearch).map((step, i) => (
+                    <div key={step.id} className={`flex items-center gap-2 text-sm transition-opacity ${i <= analyzeStep ? 'opacity-100' : 'opacity-30'}`}>
+                      <div className={`h-2 w-2 rounded-full flex-shrink-0 ${i < analyzeStep ? 'bg-green-500' : i === analyzeStep ? 'bg-primary animate-pulse' : 'bg-muted'}`} />
+                      {step.label}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">This takes 20-40 seconds...</p>
+              </CardContent>
+            ) : (
+              <form onSubmit={handleRunAnalysis} className="flex flex-col flex-1 overflow-hidden">
+                <CardContent className="space-y-5 overflow-y-auto flex-1">
+                  <div className="space-y-1">
+                    <Label>Master Resume *</Label>
+                    <select required value={analyzeForm.masterId} onChange={(e) => setAnalyzeForm({ ...analyzeForm, masterId: e.target.value })} className="w-full border rounded-md px-3 py-2 text-sm bg-background">
+                      <option value="">Select a master resume...</option>
+                      {masters.map((m) => (
+                        <option key={m.id} value={m.id}>{m.variant_name}{m.is_default ? ' (default)' : ''}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Job Description *</Label>
+                    <div className="flex gap-2 text-sm">
+                      <button type="button" onClick={() => setAnalyzeForm({ ...analyzeForm, jobInputMode: 'paste' })} className={`px-3 py-1 rounded-md transition-colors ${analyzeForm.jobInputMode === 'paste' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Paste JD</button>
+                      <button type="button" onClick={() => setAnalyzeForm({ ...analyzeForm, jobInputMode: 'flagged' })} disabled={flaggedJobs.length === 0} className={`px-3 py-1 rounded-md transition-colors disabled:opacity-40 ${analyzeForm.jobInputMode === 'flagged' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>From Flagged ({flaggedJobs.length})</button>
+                    </div>
+                    {analyzeForm.jobInputMode === 'paste' ? (
+                      <textarea required value={analyzeForm.jobDescription} onChange={(e) => setAnalyzeForm({ ...analyzeForm, jobDescription: e.target.value })} placeholder="Paste the full job description here..." className="w-full border rounded-md px-3 py-2 text-sm bg-background min-h-[160px] resize-y" />
+                    ) : (
+                      <select value={analyzeForm.selectedJobId} onChange={(e) => setAnalyzeForm({ ...analyzeForm, selectedJobId: e.target.value })} className="w-full border rounded-md px-3 py-2 text-sm bg-background" required={analyzeForm.jobInputMode === 'flagged'}>
+                        <option value="">Select a flagged job...</option>
+                        {flaggedJobs.map((j) => (
+                          <option key={j.id} value={j.id}>{j.title} - {j.company}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div className="space-y-2 border rounded-lg p-3 bg-muted/30">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={analyzeForm.runCompanySearch} onChange={(e) => setAnalyzeForm({ ...analyzeForm, runCompanySearch: e.target.checked })} />
+                      <span className="text-sm font-medium">Company Research</span>
+                      <Badge variant="outline" className="text-xs ml-1">1 SerpAPI credit</Badge>
+                    </label>
+                    {analyzeForm.runCompanySearch && (
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">Search query (editable)</Label>
+                        <Input value={analyzeForm.companySearchQuery} onChange={(e) => setAnalyzeForm({ ...analyzeForm, companySearchQuery: e.target.value })} placeholder={'"Company Name" news 2025 OR 2026'} className="text-sm" />
+                      </div>
+                    )}
+                  </div>
+                  <Button type="submit" className="w-full gap-2">
+                    <Sparkles className="h-4 w-4" /> Run Analysis
+                  </Button>
+                </CardContent>
+              </form>
+            )}
+          </Card>
+        </div>
+      )}
+    </div>
+  )
+}
