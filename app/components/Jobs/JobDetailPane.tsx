@@ -243,7 +243,3 @@ export function JobDetailPane({
     </div>
   )
 }
-
-    </>
-  )
-}

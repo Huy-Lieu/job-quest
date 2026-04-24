@@ -296,6 +296,3 @@ export function JobRowDesktop({
     </>
   )
 }
-    </>
-  )
-}
