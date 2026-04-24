@@ -406,3 +406,16 @@ export async function DELETE(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }
+
+// POST variant — same as GET but reads configId from JSON body instead of query params.
+// The client sends { configId } as a POST body; we forward to GET by constructing an
+// equivalent Request with configId in the search params.
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => ({}))
+  const configId = body?.configId
+  if (!configId) return NextResponse.json({ error: 'configId is required' }, { status: 400 })
+
+  const url = new URL(request.url)
+  url.searchParams.set('configId', configId)
+  return GET(new Request(url.toString(), { headers: request.headers }))
+}
