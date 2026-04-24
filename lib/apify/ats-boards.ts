@@ -1,0 +1,285 @@
+// lib/apify/ats-boards.ts
+// ATS board JSON APIs — free, structured, no Apify credits consumed.
+// Includes: Greenhouse, Lever, Ashby, Workday, SmartRecruiters, Workable, Recruitee
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Greenhouse — boards-api.greenhouse.io/v1/boards/<slug>/jobs
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface GreenhouseJob {
+  id:              number | string
+  title?:          string
+  absolute_url?:   string
+  content?:        string
+  updated_at?:     string
+  first_published?: string
+  location?:       { name?: string }
+}
+
+export async function fetchGreenhouseBoard(slug: string): Promise<Record<string, unknown>[]> {
+  try {
+    const res = await fetch(
+      `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`,
+      { headers: { Accept: 'application/json' } }
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    return ((body.jobs ?? []) as GreenhouseJob[]).map((j) => ({
+      title:         j.title ?? '',
+      company:       slug,
+      location:      j.location?.name ?? 'Unknown',
+      url:           j.absolute_url ?? '',
+      description:   j.content ?? '',
+      postedAt:      j.first_published ?? j.updated_at ?? null,
+      source_job_id: String(j.id),
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lever — api.lever.co/v0/postings/<slug>?mode=json
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface LeverJob {
+  id:          string
+  text?:       string
+  hostedUrl?:  string
+  description?: string
+  descriptionPlain?: string
+  workplaceType?: string
+  createdAt?:  number
+  categories?: { location?: string; commitment?: string; team?: string }
+}
+
+export async function fetchLeverBoard(slug: string): Promise<Record<string, unknown>[]> {
+  try {
+    const res = await fetch(
+      `https://api.lever.co/v0/postings/${slug}?mode=json`,
+      { headers: { Accept: 'application/json' } }
+    )
+    if (!res.ok) return []
+    const postings = await res.json()
+    return ((postings ?? []) as LeverJob[]).map((p) => ({
+      title:          p.text ?? '',
+      company:        slug,
+      location:       p.categories?.location ?? 'Unknown',
+      url:            p.hostedUrl ?? '',
+      description:    p.descriptionPlain ?? p.description ?? '',
+      employmentType: p.categories?.commitment,
+      workplaceType:  p.workplaceType,
+      postedAt:       p.createdAt ? new Date(p.createdAt).toISOString() : null,
+      source_job_id:  p.id,
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ashby — api.ashbyhq.com/posting-api/job-board/<slug>
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AshbyJob {
+  id:                string
+  title?:            string
+  jobUrl?:           string
+  location?:         string
+  descriptionHtml?:  string
+  descriptionPlain?: string
+  employmentType?:   string
+  isRemote?:         boolean
+  publishedAt?:      string
+}
+
+export async function fetchAshbyBoard(slug: string): Promise<Record<string, unknown>[]> {
+  try {
+    const res = await fetch(
+      `https://api.ashbyhq.com/posting-api/job-board/${slug}?includeCompensation=true`,
+      { headers: { Accept: 'application/json' } }
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    return ((body.jobs ?? []) as AshbyJob[]).map((j) => ({
+      title:          j.title ?? '',
+      company:        slug,
+      location:       j.location ?? 'Unknown',
+      url:            j.jobUrl ?? '',
+      description:    j.descriptionHtml ?? j.descriptionPlain ?? '',
+      employmentType: j.employmentType,
+      workplaceType:  j.isRemote ? 'remote' : undefined,
+      postedAt:       j.publishedAt ?? null,
+      source_job_id:  j.id,
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workday — POST JSON per {tenant, dc, site}
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface WorkdayTenant {
+  tenant: string   // e.g. 'qualcomm'
+  dc:     string   // e.g. 'wd5'
+  site:   string   // e.g. 'External'
+}
+
+interface WorkdayJob {
+  title?:         string
+  externalPath?:  string
+  locationsText?: string
+  postedOn?:      string
+  bulletFields?:  string[]
+}
+
+export async function fetchWorkdayBoard(
+  t: WorkdayTenant,
+  query: string,
+  limit = 20
+): Promise<Record<string, unknown>[]> {
+  try {
+    const base = `https://${t.tenant}.${t.dc}.myworkdayjobs.com`
+    const res = await fetch(
+      `${base}/wday/cxs/${t.tenant}/${t.site}/jobs`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ appliedFacets: {}, limit, offset: 0, searchText: query }),
+      }
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    const postings = (body.jobPostings ?? []) as WorkdayJob[]
+    return postings.map((j) => ({
+      title:         j.title ?? '',
+      company:       t.tenant,
+      location:      j.locationsText ?? 'Unknown',
+      url:           j.externalPath ? `${base}${j.externalPath}` : '',
+      description:   (j.bulletFields ?? []).join('\n'),
+      postedAt:      j.postedOn ?? null,
+      source_job_id: j.externalPath ?? null,
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SmartRecruiters — api.smartrecruiters.com/v1/companies/<slug>/postings
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface SmartRecruitersJob {
+  id?:       string
+  name?:     string
+  location?: { city?: string; country?: string }
+  releasedDate?: string
+  company?:  { name?: string }
+}
+
+export async function fetchSmartRecruitersBoard(slug: string): Promise<Record<string, unknown>[]> {
+  try {
+    const res = await fetch(
+      `https://api.smartrecruiters.com/v1/companies/${slug}/postings?limit=100`,
+      { headers: { Accept: 'application/json' } }
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    return ((body.content ?? []) as SmartRecruitersJob[]).map((j) => ({
+      title:         j.name ?? '',
+      company:       j.company?.name ?? slug,
+      location:      [j.location?.city, j.location?.country].filter(Boolean).join(', ') || 'Unknown',
+      url:           j.id ? `https://careers.smartrecruiters.com/${slug}/${j.id}` : '',
+      description:   '',
+      postedAt:      j.releasedDate ?? null,
+      source_job_id: j.id ?? null,
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workable — apply.workable.com/api/v3/accounts/<slug>/jobs
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WorkableJob {
+  id?:          string
+  shortcode?:   string
+  title?:       string
+  url?:         string
+  application_url?: string
+  description?: string
+  location?:    { city?: string; country?: string }
+  employment_type?: string
+  workplace_type?:  string
+  created_at?:  string
+}
+
+export async function fetchWorkableBoard(slug: string): Promise<Record<string, unknown>[]> {
+  try {
+    const res = await fetch(
+      `https://apply.workable.com/api/v3/accounts/${slug}/jobs?limit=100`,
+      { headers: { Accept: 'application/json' } }
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    return ((body.results ?? body.jobs ?? []) as WorkableJob[]).map((j) => ({
+      title:          j.title ?? '',
+      company:        slug,
+      location:       [j.location?.city, j.location?.country].filter(Boolean).join(', ') || 'Unknown',
+      url:            j.application_url ?? j.url ?? (j.shortcode ? `https://apply.workable.com/${slug}/j/${j.shortcode}/` : ''),
+      description:    j.description ?? '',
+      employmentType: j.employment_type,
+      workplaceType:  j.workplace_type,
+      postedAt:       j.created_at ?? null,
+      source_job_id:  j.shortcode ?? j.id ?? null,
+    }))
+  } catch {
+    return []
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recruitee — {slug}.recruitee.com/api/offers
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface RecruiteeJob {
+  id?:          number
+  slug?:        string
+  title?:       string
+  careers_url?: string
+  description?: string
+  location?:    string
+  city?:        string
+  country_code?: string
+  employment_type_code?: string
+  remote?:      boolean
+  published_at?: string
+}
+
+export async function fetchRecruiteeBoard(slug: string): Promise<Record<string, unknown>[]> {
+  try {
+    const res = await fetch(
+      'https://' + slug + '.recruitee.com/api/offers/',
+      { headers: { Accept: 'application/json' } }
+    )
+    if (!res.ok) return []
+    const body = await res.json()
+    return ((body.offers ?? []) as RecruiteeJob[]).map((j) => ({
+      title:          j.title ?? '',
+      company:        slug,
+      location:       j.location ?? ([j.city, j.country_code].filter(Boolean).join(', ') || 'Unknown'),
+      url:            j.careers_url ?? (j.slug ? 'https://' + slug + '.recruitee.com/o/' + j.slug : ''),
+      description:    j.description ?? '',
+      employmentType: j.employment_type_code,
+      workplaceType:  j.remote ? 'remote' : undefined,
+      postedAt:       j.published_at ?? null,
+      source_job_id:  j.id != null ? String(j.id) : null,
+    }))
+  } catch {
+    return []
+  }
+}

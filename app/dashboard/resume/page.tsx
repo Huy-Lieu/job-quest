@@ -1,42 +1,21 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { ResumeVersion, JobWithScore, AnalysisResult } from '@/lib/types'
-import { Plus, X, Trash2, Star, FileText, Sparkles, ChevronDown, ChevronUp, Loader2, Upload, ArrowLeft } from 'lucide-react'
+import { FileText, Plus, Star, Trash2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
+import type { ResumeVersion, JobWithScore, AnalysisResult } from '@/lib/types'
+
+import { MarkdownBlock }           from '@/app/components/Resume/MarkdownBlock'
+import { MasterResumeModal }       from '@/app/components/Resume/MasterResumeModal'
+import { AnalyzeJobModal }         from '@/app/components/Resume/AnalyzeJobModal'
+import { AnalysisResultsSection }  from '@/app/components/Resume/AnalysisResultsSection'
+import { PastAnalysesList }        from '@/app/components/Resume/PastAnalysesList'
 
 type AnalysisTab = 'job' | 'company' | 'gap' | 'resume' | 'prep' | 'cover'
-type ResumeMode = 'conservative' | 'aggressive'
-
-function MarkdownBlock({ text }: { text: string }) {
-  const lines = text.split('\n')
-  return (
-    <div className="text-sm space-y-1">
-      {lines.map((line, i) => {
-        if (line.startsWith('### ')) return <h3 key={i} className="font-bold text-base mt-3 mb-1">{line.slice(4)}</h3>
-        if (line.startsWith('## ')) return <h2 key={i} className="font-bold text-lg mt-4 mb-1">{line.slice(3)}</h2>
-        if (line.startsWith('# ')) return <h1 key={i} className="font-bold text-xl mt-4 mb-1">{line.slice(2)}</h1>
-        if (line.startsWith('- ') || line.startsWith('* ')) return <p key={i} className="pl-4">&bull; {line.slice(2)}</p>
-        if (line.match(/^\d+\.\s/)) return <p key={i} className="pl-4">{line}</p>
-        if (line.trim() === '') return <div key={i} className="h-1" />
-        const parts = line.split(/\*\*(.*?)\*\*/g)
-        if (parts.length > 1) {
-          return (
-            <p key={i}>
-              {parts.map((p, j) => j % 2 === 1 ? <strong key={j}>{p}</strong> : p)}
-            </p>
-          )
-        }
-        return <p key={i}>{line}</p>
-      })}
-    </div>
-  )
-}
+type ResumeMode  = 'conservative' | 'aggressive'
 
 const STEPS = [
   { id: 'job',     label: 'Analyzing job description...' },
@@ -49,223 +28,125 @@ const STEPS = [
 ]
 
 export default function ResumePage() {
-  const [masters, setMasters] = useState<ResumeVersion[]>([])
-  const [versions, setVersions] = useState<ResumeVersion[]>([])
+  const [masters, setMasters]       = useState<ResumeVersion[]>([])
+  const [versions, setVersions]     = useState<ResumeVersion[]>([])
   const [flaggedJobs, setFlaggedJobs] = useState<JobWithScore[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading]       = useState(true)
 
+  // Master modal state
   const [showMasterModal, setShowMasterModal] = useState(false)
-  const [editingMaster, setEditingMaster] = useState<ResumeVersion | null>(null)
-  const [masterForm, setMasterForm] = useState({ variant_name: '', content: '', make_default: false })
-  const [savingMaster, setSavingMaster] = useState(false)
-  const [uploadMode, setUploadMode] = useState<'file' | 'paste'>('file')
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [dragActive, setDragActive] = useState(false)
-  const [extracting, setExtracting] = useState(false)
-  const [extractedText, setExtractedText] = useState<string | null>(null)
+  const [editingMaster, setEditingMaster]     = useState<ResumeVersion | null>(null)
+  const [masterForm, setMasterForm]           = useState({ variant_name: '', content: '', make_default: false })
+  const [savingMaster, setSavingMaster]       = useState(false)
+  const [uploadMode, setUploadMode]           = useState<'file' | 'paste'>('file')
+  const [selectedFile, setSelectedFile]       = useState<File | null>(null)
+  const [dragActive, setDragActive]           = useState(false)
+  const [extracting, setExtracting]           = useState(false)
+  const [extractedText, setExtractedText]     = useState<string | null>(null)
 
+  // Analyze modal state
   const [showAnalyzeModal, setShowAnalyzeModal] = useState(false)
   const [analyzeForm, setAnalyzeForm] = useState({
-    masterId: '',
-    jobInputMode: 'paste' as 'paste' | 'flagged',
-    jobDescription: '',
-    selectedJobId: '',
-    runCompanySearch: true,
-    companySearchQuery: '',
+    masterId: '', jobInputMode: 'paste' as 'paste' | 'flagged',
+    jobDescription: '', selectedJobId: '', runCompanySearch: true, companySearchQuery: '',
   })
-  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzing, setAnalyzing]   = useState(false)
   const [analyzeStep, setAnalyzeStep] = useState(0)
 
-  const [results, setResults] = useState<AnalysisResult | null>(null)
-  const [activeTab, setActiveTab] = useState<AnalysisTab>('job')
-  const [resumeMode, setResumeMode] = useState<ResumeMode>('conservative')
+  // Results state
+  const [results, setResults]             = useState<AnalysisResult | null>(null)
+  const [activeTab, setActiveTab]         = useState<AnalysisTab>('job')
+  const [resumeMode, setResumeMode]       = useState<ResumeMode>('conservative')
   const [expandedVersion, setExpandedVersion] = useState<string | null>(null)
-  const [versionTab, setVersionTab] = useState<Record<string, AnalysisTab | ResumeMode>>({})
+  const [versionTab, setVersionTab]       = useState<Record<string, AnalysisTab | ResumeMode>>({})
 
   useEffect(() => { fetchAll() }, [])
 
   useEffect(() => {
     if (analyzeForm.jobInputMode === 'paste' && analyzeForm.jobDescription) {
       const match =
-        analyzeForm.jobDescription.match(/(?:at|@)\s+([A-Z][a-zA-Z\s&,.']+?)(?:\n|,|\.|--|-)/)  ??
+        analyzeForm.jobDescription.match(/(?:at|@)\s+([A-Z][a-zA-Z\s&,.']+?)(?:\n|,|\.|--|-)/) ??
         analyzeForm.jobDescription.match(/^([A-Z][a-zA-Z\s&]+?)(?:\n|is hiring|seeks)/)
-      if (match) {
-        const company = match[1].trim()
-        setAnalyzeForm(f => ({ ...f, companySearchQuery: `"${company}" news 2025 OR 2026` }))
-      }
+      if (match) setAnalyzeForm(f => ({ ...f, companySearchQuery: `"${match[1].trim()}" news 2025 OR 2026` }))
     }
   }, [analyzeForm.jobDescription])
 
   useEffect(() => {
     if (analyzeForm.jobInputMode === 'flagged' && analyzeForm.selectedJobId) {
       const job = flaggedJobs.find(j => j.id === analyzeForm.selectedJobId)
-      if (job) {
-        setAnalyzeForm(f => ({
-          ...f,
-          companySearchQuery: `"${job.company}" news 2025 OR 2026`,
-          jobDescription: job.description ?? '',
-        }))
-      }
+      if (job) setAnalyzeForm(f => ({ ...f, companySearchQuery: `"${job.company}" news 2025 OR 2026`, jobDescription: job.description ?? '' }))
     }
   }, [analyzeForm.selectedJobId, analyzeForm.jobInputMode])
 
   useEffect(() => {
     if (showAnalyzeModal && masters.length > 0) {
-      const defaultMaster = masters.find(m => m.is_default) ?? masters[0]
-      setAnalyzeForm(f => ({ ...f, masterId: defaultMaster.id }))
+      const def = masters.find(m => m.is_default) ?? masters[0]
+      setAnalyzeForm(f => ({ ...f, masterId: def.id }))
     }
   }, [showAnalyzeModal, masters])
 
   async function fetchAll() {
     setLoading(true)
-    const [mastersRes, versionsRes, jobsRes] = await Promise.all([
-      fetch('/api/resume/masters'),
-      fetch('/api/resume/versions'),
-      fetch('/api/jobs?recommended=true&limit=50'),
-    ])
-    const [mastersData, versionsData, jobsData] = await Promise.all([
-      mastersRes.json(),
-      versionsRes.json(),
-      jobsRes.json(),
-    ])
-    if (mastersRes.ok) setMasters(mastersData)
-    if (versionsRes.ok) setVersions(versionsData)
-    if (jobsRes.ok) setFlaggedJobs(jobsData)
+    const [mr, vr, jr] = await Promise.all([fetch('/api/resume/masters'), fetch('/api/resume/versions'), fetch('/api/jobs?recommended=true&limit=50')])
+    const [md, vd, jd] = await Promise.all([mr.json(), vr.json(), jr.json()])
+    if (mr.ok) setMasters(md)
+    if (vr.ok) setVersions(vd)
+    if (jr.ok) setFlaggedJobs(jd)
     setLoading(false)
   }
 
   async function handleFileSelect(file: File) {
     const name = file.name.toLowerCase()
-    if (!name.endsWith('.pdf') && !name.endsWith('.docx')) {
-      toast.error('Only PDF and DOCX files are supported')
-      return
-    }
-    setSelectedFile(file)
-    setExtractedText(null)
-    setExtracting(true)
+    if (!name.endsWith('.pdf') && !name.endsWith('.docx')) { toast.error('Only PDF and DOCX files are supported'); return }
+    setSelectedFile(file); setExtractedText(null); setExtracting(true)
     try {
-      const fd = new FormData()
-      fd.append('file', file)
+      const fd = new FormData(); fd.append('file', file)
       const res = await fetch('/api/resume/extract', { method: 'POST', body: fd })
       const data = await res.json()
       if (res.ok) {
         setExtractedText(data.text)
-        // Auto-fill name from filename if the field is still blank
-        if (!masterForm.variant_name.trim()) {
-          const baseName = file.name
-            .replace(/\.(pdf|docx)$/i, '')
-            .replace(/[_-]+/g, ' ')
-            .trim()
-          setMasterForm(f => ({ ...f, variant_name: baseName }))
-        }
-      } else {
-        toast.error(data.error ?? 'Failed to extract text from file')
-        setSelectedFile(null)
-      }
-    } catch {
-      toast.error('Failed to extract text - check your connection')
-      setSelectedFile(null)
-    } finally {
-      setExtracting(false)
-    }
+        if (!masterForm.variant_name.trim()) setMasterForm(f => ({ ...f, variant_name: file.name.replace(/\.(pdf|docx)$/i, '').replace(/[_-]+/g, ' ').trim() }))
+      } else { toast.error(data.error ?? 'Failed to extract text from file'); setSelectedFile(null) }
+    } catch { toast.error('Failed to extract text - check your connection'); setSelectedFile(null) }
+    finally { setExtracting(false) }
   }
+
+  function resetFileState() { setSelectedFile(null); setExtractedText(null); setExtracting(false) }
 
   function handleDrag(e: React.DragEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true)
-    else if (e.type === 'dragleave') setDragActive(false)
+    e.preventDefault(); e.stopPropagation()
+    setDragActive(e.type === 'dragenter' || e.type === 'dragover')
   }
-
   function handleDrop(e: React.DragEvent) {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragActive(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFileSelect(file)
-  }
-
-  function resetFileState() {
-    setSelectedFile(null)
-    setExtractedText(null)
-    setExtracting(false)
+    e.preventDefault(); e.stopPropagation(); setDragActive(false)
+    const file = e.dataTransfer.files[0]; if (file) handleFileSelect(file)
   }
 
   async function handleSaveMaster(e: React.FormEvent) {
     e.preventDefault()
-
     if (!editingMaster) {
-      if (uploadMode === 'file') {
-        if (!selectedFile) { toast.error('Please select a PDF or DOCX file'); return }
-        if (extracting) { toast.error('Still extracting text, please wait'); return }
-        if (!extractedText?.trim()) { toast.error('No text could be extracted from the file'); return }
-      }
-      if (uploadMode === 'paste' && !masterForm.content.trim()) {
-        toast.error('Please paste your resume content')
-        return
-      }
+      if (uploadMode === 'file' && (!selectedFile || extracting || !extractedText?.trim())) { toast.error('Please upload and wait for text extraction'); return }
+      if (uploadMode === 'paste' && !masterForm.content.trim()) { toast.error('Please paste your resume content'); return }
     }
-
     setSavingMaster(true)
-
     if (editingMaster) {
-      const res = await fetch(`/api/resume/masters/${editingMaster.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          variant_name: masterForm.variant_name,
-          content: masterForm.content,
-          ...(masterForm.make_default ? { is_default: true } : {}),
-        }),
-      })
+      const res = await fetch(`/api/resume/masters/${editingMaster.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ variant_name: masterForm.variant_name, content: masterForm.content, ...(masterForm.make_default ? { is_default: true } : {}) }) })
       const data = await res.json()
-      if (res.ok) {
-        setMasters(prev => prev.map(m => {
-          if (masterForm.make_default) return m.id === editingMaster.id ? { ...data } : { ...m, is_default: false }
-          return m.id === editingMaster.id ? data : m
-        }))
-        toast.success('Resume updated')
-        closeMasterModal()
-      } else {
-        toast.error(data.error)
-      }
+      if (res.ok) { setMasters(prev => prev.map(m => { if (masterForm.make_default) return m.id === editingMaster.id ? { ...data } : { ...m, is_default: false }; return m.id === editingMaster.id ? data : m })); toast.success('Resume updated'); closeMasterModal() }
+      else toast.error(data.error)
     } else {
-      // For file upload mode, send the extracted (possibly edited) text as JSON
       const content = uploadMode === 'file' ? (extractedText ?? '') : masterForm.content
-      const res = await fetch('/api/resume/masters', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          variant_name: masterForm.variant_name,
-          content,
-          make_default: masterForm.make_default,
-        }),
-      })
+      const res = await fetch('/api/resume/masters', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ variant_name: masterForm.variant_name, content, make_default: masterForm.make_default }) })
       const data = await res.json()
-      if (res.ok) {
-        setMasters(prev => {
-          const updated = masterForm.make_default ? prev.map(m => ({ ...m, is_default: false })) : prev
-          return [...updated, data]
-        })
-        toast.success('Master resume saved')
-        closeMasterModal()
-      } else {
-        toast.error(data.error)
-      }
+      if (res.ok) { setMasters(prev => { const u = masterForm.make_default ? prev.map(m => ({ ...m, is_default: false })) : prev; return [...u, data] }); toast.success('Master resume saved'); closeMasterModal() }
+      else toast.error(data.error)
     }
     setSavingMaster(false)
   }
 
   async function handleSetDefault(id: string) {
-    const res = await fetch(`/api/resume/masters/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_default: true }),
-    })
-    if (res.ok) {
-      setMasters(prev => prev.map(m => ({ ...m, is_default: m.id === id })))
-      toast.success('Default resume set')
-    }
+    const res = await fetch(`/api/resume/masters/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_default: true }) })
+    if (res.ok) { setMasters(prev => prev.map(m => ({ ...m, is_default: m.id === id }))); toast.success('Default resume set') }
   }
 
   async function handleDeleteMaster(id: string) {
@@ -275,145 +156,25 @@ export default function ResumePage() {
   }
 
   function openEditMaster(master: ResumeVersion) {
-    setEditingMaster(master)
-    setMasterForm({ variant_name: master.variant_name ?? '', content: master.content ?? '', make_default: master.is_default })
-    setUploadMode('paste')
-    resetFileState()
-    setShowMasterModal(true)
+    setEditingMaster(master); setMasterForm({ variant_name: master.variant_name ?? '', content: master.content ?? '', make_default: master.is_default }); setUploadMode('paste'); resetFileState(); setShowMasterModal(true)
   }
 
   function closeMasterModal() {
-    setShowMasterModal(false)
-    setEditingMaster(null)
-    setMasterForm({ variant_name: '', content: '', make_default: false })
-    setUploadMode('file')
-    setDragActive(false)
-    resetFileState()
+    setShowMasterModal(false); setEditingMaster(null); setMasterForm({ variant_name: '', content: '', make_default: false }); setUploadMode('file'); setDragActive(false); resetFileState()
   }
 
   async function handleRunAnalysis(e: React.FormEvent) {
     e.preventDefault()
     if (!analyzeForm.masterId) { toast.error('Please select a master resume'); return }
-    const jd = analyzeForm.jobInputMode === 'paste'
-      ? analyzeForm.jobDescription
-      : flaggedJobs.find(j => j.id === analyzeForm.selectedJobId)?.description ?? ''
+    const jd = analyzeForm.jobInputMode === 'paste' ? analyzeForm.jobDescription : flaggedJobs.find(j => j.id === analyzeForm.selectedJobId)?.description ?? ''
     if (!jd.trim()) { toast.error('Please provide a job description'); return }
-
-    setAnalyzing(true)
-    setResults(null)
-    setAnalyzeStep(0)
-
-    const stepInterval = setInterval(() => {
-      setAnalyzeStep(prev => {
-        const maxStep = analyzeForm.runCompanySearch ? 5 : 4
-        return prev < maxStep ? prev + 1 : prev
-      })
-    }, 5000)
-
-    const res = await fetch('/api/resume/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        masterId: analyzeForm.masterId,
-        jobDescription: jd,
-        jobId: analyzeForm.jobInputMode === 'flagged' ? analyzeForm.selectedJobId : null,
-        runCompanySearch: analyzeForm.runCompanySearch,
-        companySearchQuery: analyzeForm.runCompanySearch ? analyzeForm.companySearchQuery : null,
-      }),
-    })
-
-    clearInterval(stepInterval)
-    setAnalyzeStep(STEPS.length - 1)
-    setAnalyzing(false)
-
+    setAnalyzing(true); setResults(null); setAnalyzeStep(0)
+    const stepInterval = setInterval(() => setAnalyzeStep(prev => { const max = analyzeForm.runCompanySearch ? 5 : 4; return prev < max ? prev + 1 : prev }), 5000)
+    const res = await fetch('/api/resume/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ masterId: analyzeForm.masterId, jobDescription: jd, jobId: analyzeForm.jobInputMode === 'flagged' ? analyzeForm.selectedJobId : null, runCompanySearch: analyzeForm.runCompanySearch, companySearchQuery: analyzeForm.runCompanySearch ? analyzeForm.companySearchQuery : null }) })
+    clearInterval(stepInterval); setAnalyzeStep(STEPS.length - 1); setAnalyzing(false)
     const data = await res.json()
-    if (res.ok) {
-      setResults(data)
-      setActiveTab('job')
-      setShowAnalyzeModal(false)
-      await fetchAll()
-      toast.success('Analysis complete!')
-    } else {
-      toast.error(data.error ?? 'Analysis failed')
-    }
-  }
-
-  const TABS: { id: AnalysisTab; label: string; hidden?: boolean }[] = [
-    { id: 'job',     label: 'Job Breakdown' },
-    { id: 'company', label: 'Company Intel', hidden: !results?.companyIntel },
-    { id: 'gap',     label: `Gap Analysis - ${results?.atsScore ?? '--'}/100` },
-    { id: 'resume',  label: 'Tailored Resume' },
-    { id: 'prep',    label: 'Prep Briefing' },
-    { id: 'cover',   label: 'Cover Letter' },
-  ]
-
-  // ── Upload section: 3 sub-states ─────────────────────────────────────────
-
-  function UploadSection() {
-    // State 3: preview (extracted text ready)
-    if (extractedText !== null) {
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm">
-              <FileText className="h-4 w-4 text-primary" />
-              <span className="font-medium truncate max-w-[200px]">{selectedFile?.name}</span>
-            </div>
-            <button
-              type="button"
-              onClick={resetFileState}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="h-3 w-3" /> Change file
-            </button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            This is exactly what Claude will read. Edit anything that looks wrong.
-          </p>
-          <textarea
-            value={extractedText}
-            onChange={(e) => setExtractedText(e.target.value)}
-            className="w-full border rounded-md px-3 py-2 text-sm bg-background min-h-[300px] resize-y font-mono"
-          />
-        </div>
-      )
-    }
-
-    // State 2: extracting
-    if (extracting) {
-      return (
-        <div className="border-2 border-dashed rounded-lg p-8 flex flex-col items-center gap-3 text-center">
-          <Loader2 className="h-8 w-8 text-primary animate-spin" />
-          <div>
-            <p className="text-sm font-medium">Extracting text...</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{selectedFile?.name}</p>
-          </div>
-        </div>
-      )
-    }
-
-    // State 1: drop zone
-    return (
-      <div
-        onDragEnter={handleDrag}
-        onDragOver={handleDrag}
-        onDragLeave={handleDrag}
-        onDrop={handleDrop}
-        className={`relative border-2 border-dashed rounded-lg p-8 text-center transition-colors ${dragActive ? 'border-primary bg-primary/5' : 'border-muted-foreground/25 hover:border-muted-foreground/50'}`}
-      >
-        <input
-          type="file"
-          accept=".pdf,.docx"
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f) }}
-        />
-        <div className="space-y-2 pointer-events-none">
-          <Upload className="h-8 w-8 text-muted-foreground mx-auto" />
-          <p className="text-sm font-medium">Drop your resume here</p>
-          <p className="text-xs text-muted-foreground">PDF or DOCX - or click to browse</p>
-        </div>
-      </div>
-    )
+    if (res.ok) { setResults(data); setActiveTab('job'); setShowAnalyzeModal(false); await fetchAll(); toast.success('Analysis complete!') }
+    else toast.error(data.error ?? 'Analysis failed')
   }
 
   return (
@@ -428,24 +189,19 @@ export default function ResumePage() {
         </Button>
       </div>
 
+      {/* Master Resumes */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-base">Master Resumes</h3>
-          <Button variant="outline" size="sm" onClick={() => setShowMasterModal(true)} className="gap-1">
-            <Plus className="h-3 w-3" /> Add Master
-          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowMasterModal(true)} className="gap-1"><Plus className="h-3 w-3" /> Add Master</Button>
         </div>
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        ) : masters.length === 0 ? (
+        {loading ? <p className="text-sm text-muted-foreground">Loading...</p> : masters.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-8 text-center">
               <FileText className="h-8 w-8 text-muted-foreground mb-2" />
               <p className="font-medium text-sm">No master resumes yet</p>
               <p className="text-xs text-muted-foreground mt-1">Add a master resume to start analyzing jobs</p>
-              <Button variant="outline" size="sm" onClick={() => setShowMasterModal(true)} className="mt-3 gap-1">
-                <Plus className="h-3 w-3" /> Add Master Resume
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => setShowMasterModal(true)} className="mt-3 gap-1"><Plus className="h-3 w-3" /> Add Master Resume</Button>
             </CardContent>
           </Card>
         ) : (
@@ -462,15 +218,9 @@ export default function ResumePage() {
                   </div>
                   <p className="text-xs text-muted-foreground line-clamp-2">{m.content?.slice(0, 120)}...</p>
                   <div className="flex items-center gap-2 pt-1">
-                    {!m.is_default && (
-                      <button onClick={() => handleSetDefault(m.id)} className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
-                        <Star className="h-3 w-3" /> Set default
-                      </button>
-                    )}
+                    {!m.is_default && <button onClick={() => handleSetDefault(m.id)} className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1"><Star className="h-3 w-3" /> Set default</button>}
                     <button onClick={() => openEditMaster(m)} className="text-xs text-muted-foreground hover:text-foreground ml-auto">Edit</button>
-                    <button onClick={() => handleDeleteMaster(m.id)} className="text-muted-foreground hover:text-destructive">
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                    <button onClick={() => handleDeleteMaster(m.id)} className="text-muted-foreground hover:text-destructive"><Trash2 className="h-3 w-3" /></button>
                   </div>
                 </CardContent>
               </Card>
@@ -480,292 +230,35 @@ export default function ResumePage() {
       </section>
 
       {results && (
-        <section className="space-y-4">
-          <h3 className="font-semibold text-base">Latest Analysis</h3>
-          <div className="flex items-center gap-4 p-4 rounded-lg bg-muted/50">
-            <div className="text-center flex-shrink-0">
-              <p className="text-3xl font-bold">{results.atsScore}</p>
-              <p className="text-xs text-muted-foreground">ATS Score</p>
-            </div>
-            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${results.atsScore >= 70 ? 'bg-green-500' : results.atsScore >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                style={{ width: `${results.atsScore}%` }}
-              />
-            </div>
-            <p className="text-sm text-muted-foreground flex-shrink-0">
-              {results.atsScore >= 70 ? 'Strong match' : results.atsScore >= 50 ? 'Decent match' : 'Needs work'}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-1 border-b pb-2">
-            {TABS.filter(t => !t.hidden).map(t => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${activeTab === t.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <Card>
-            <CardContent className="p-5">
-              {activeTab === 'job' && <MarkdownBlock text={results.jobAnalysis} />}
-              {activeTab === 'company' && results.companyIntel && <MarkdownBlock text={results.companyIntel} />}
-              {activeTab === 'gap' && <MarkdownBlock text={results.gapAnalysis} />}
-              {activeTab === 'resume' && (
-                <div className="space-y-3">
-                  <div className="flex gap-2 items-center">
-                    <button onClick={() => setResumeMode('conservative')} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${resumeMode === 'conservative' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Conservative</button>
-                    <button onClick={() => setResumeMode('aggressive')} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${resumeMode === 'aggressive' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Aggressive</button>
-                    <button onClick={() => { navigator.clipboard.writeText(resumeMode === 'conservative' ? results.tailoredConservative : results.tailoredAggressive); toast.success('Copied to clipboard') }} className="ml-auto text-xs text-muted-foreground hover:text-foreground px-2">Copy</button>
-                  </div>
-                  <pre className="text-xs whitespace-pre-wrap font-mono bg-muted/30 rounded p-3 max-h-[500px] overflow-y-auto">
-                    {resumeMode === 'conservative' ? results.tailoredConservative : results.tailoredAggressive}
-                  </pre>
-                </div>
-              )}
-              {activeTab === 'prep' && <MarkdownBlock text={results.prepBriefing} />}
-              {activeTab === 'cover' && (
-                <div className="space-y-3">
-                  <button onClick={() => { navigator.clipboard.writeText(results.coverLetter); toast.success('Copied to clipboard') }} className="text-xs text-muted-foreground hover:text-foreground">Copy</button>
-                  <pre className="text-sm whitespace-pre-wrap leading-relaxed">{results.coverLetter}</pre>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </section>
+        <AnalysisResultsSection
+          results={results} activeTab={activeTab} setActiveTab={setActiveTab}
+          resumeMode={resumeMode} setResumeMode={setResumeMode}
+          onCopy={(text) => { navigator.clipboard.writeText(text); toast.success('Copied to clipboard') }}
+        />
       )}
 
-      {versions.length > 0 && (
-        <section className="space-y-3">
-          <h3 className="font-semibold text-base">Past Analyses</h3>
-          <div className="space-y-2">
-            {versions.map((v) => (
-              <Card key={v.id} className="hover:shadow-sm transition-shadow">
-                <CardContent className="py-3 px-4">
-                  <button className="w-full flex items-center justify-between text-left" onClick={() => setExpandedVersion(expandedVersion === v.id ? null : v.id)}>
-                    <div className="flex items-center gap-3">
-                      <FileText className="h-4 w-4 text-muted-foreground" />
-                      <div>
-                        <p className="text-sm font-medium">{v.variant_name}</p>
-                        {v.job && <p className="text-xs text-muted-foreground">{v.job.canonical_title} &middot; {v.job.company}</p>}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      {v.ats_score !== null && <Badge variant="outline" className="text-xs">{v.ats_score}/100</Badge>}
-                      <p className="text-xs text-muted-foreground">{new Date(v.created_at).toLocaleDateString()}</p>
-                      {expandedVersion === v.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                    </div>
-                  </button>
-                  {expandedVersion === v.id && v.content && (() => {
-                    let parsed: AnalysisResult | null = null
-                    try { parsed = JSON.parse(v.content!) } catch { /* plain text */ }
-
-                    if (!parsed) {
-                      return <pre className="mt-3 text-xs whitespace-pre-wrap font-mono bg-muted/30 rounded p-3 max-h-[300px] overflow-y-auto">{v.content}</pre>
-                    }
-
-                    const curTab = versionTab[v.id] ?? 'job'
-                    const vTabs: { id: AnalysisTab; label: string; hidden?: boolean }[] = [
-                      { id: 'job', label: 'Job Breakdown' },
-                      { id: 'company', label: 'Company Intel', hidden: !parsed.companyIntel },
-                      { id: 'gap', label: `Gap — ${parsed.atsScore}/100` },
-                      { id: 'resume', label: 'Tailored Resume' },
-                      { id: 'prep', label: 'Prep Briefing' },
-                      { id: 'cover', label: 'Cover Letter' },
-                    ]
-
-                    return (
-                      <div className="mt-3 space-y-3">
-                        <div className="flex flex-wrap gap-1 border-b pb-2">
-                          {vTabs.filter(t => !t.hidden).map(t => (
-                            <button
-                              key={t.id}
-                              onClick={(e) => { e.stopPropagation(); setVersionTab(prev => ({ ...prev, [v.id]: t.id })) }}
-                              className={`px-2.5 py-1 text-xs rounded-md transition-colors ${curTab === t.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
-                            >
-                              {t.label}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="max-h-[400px] overflow-y-auto">
-                          {curTab === 'job' && <MarkdownBlock text={parsed.jobAnalysis} />}
-                          {curTab === 'company' && parsed.companyIntel && <MarkdownBlock text={parsed.companyIntel} />}
-                          {curTab === 'gap' && <MarkdownBlock text={parsed.gapAnalysis} />}
-                          {curTab === 'resume' && (
-                            <div className="space-y-2">
-                              <div className="flex gap-2">
-                                <button onClick={(e) => { e.stopPropagation(); setVersionTab(prev => ({ ...prev, [v.id + '_mode']: 'conservative' as ResumeMode })) }} className={`px-2.5 py-1 text-xs rounded-md ${(versionTab[v.id + '_mode'] ?? 'conservative') === 'conservative' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Conservative</button>
-                                <button onClick={(e) => { e.stopPropagation(); setVersionTab(prev => ({ ...prev, [v.id + '_mode']: 'aggressive' as ResumeMode })) }} className={`px-2.5 py-1 text-xs rounded-md ${versionTab[v.id + '_mode'] === 'aggressive' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Aggressive</button>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText((versionTab[v.id + '_mode'] ?? 'conservative') === 'aggressive' ? parsed!.tailoredAggressive : parsed!.tailoredConservative); toast.success('Copied') }}
-                                  className="ml-auto text-xs text-muted-foreground hover:text-foreground px-2"
-                                >Copy</button>
-                              </div>
-                              <pre className="text-xs whitespace-pre-wrap font-mono bg-muted/30 rounded p-3 max-h-[300px] overflow-y-auto">
-                                {(versionTab[v.id + '_mode'] ?? 'conservative') === 'aggressive' ? parsed.tailoredAggressive : parsed.tailoredConservative}
-                              </pre>
-                            </div>
-                          )}
-                          {curTab === 'prep' && <MarkdownBlock text={parsed.prepBriefing} />}
-                          {curTab === 'cover' && (
-                            <div className="space-y-2">
-                              <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(parsed!.coverLetter); toast.success('Copied') }} className="text-xs text-muted-foreground hover:text-foreground">Copy</button>
-                              <pre className="text-sm whitespace-pre-wrap leading-relaxed">{parsed.coverLetter}</pre>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })()}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </section>
-      )}
+      <PastAnalysesList
+        versions={versions} expandedVersion={expandedVersion} setExpandedVersion={setExpandedVersion}
+        versionTab={versionTab} setVersionTab={setVersionTab}
+      />
 
       {showMasterModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <CardHeader className="flex flex-row items-center justify-between pb-4 flex-shrink-0">
-              <CardTitle>{editingMaster ? 'Edit Master Resume' : 'Add Master Resume'}</CardTitle>
-              <button onClick={closeMasterModal} className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
-            </CardHeader>
-            <form onSubmit={handleSaveMaster} className="flex flex-col flex-1 overflow-hidden">
-              <CardContent className="space-y-4 overflow-y-auto flex-1">
-                <div className="space-y-1">
-                  <Label>Name *</Label>
-                  <Input required value={masterForm.variant_name} onChange={(e) => setMasterForm({ ...masterForm, variant_name: e.target.value })} placeholder="e.g. Software Engineering, PhD Applications" />
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Resume Content *</Label>
-                    {!editingMaster && (
-                      <div className="flex gap-1 bg-muted p-0.5 rounded-md">
-                        <button
-                          type="button"
-                          onClick={() => { setUploadMode('file'); resetFileState() }}
-                          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${uploadMode === 'file' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
-                        >
-                          Upload File
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setUploadMode('paste')}
-                          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${uploadMode === 'paste' ? 'bg-background shadow-sm' : 'text-muted-foreground'}`}
-                        >
-                          Paste Text
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {(!editingMaster && uploadMode === 'file') ? (
-                    <UploadSection />
-                  ) : (
-                    <textarea
-                      required={uploadMode === 'paste' || !!editingMaster}
-                      value={masterForm.content}
-                      onChange={(e) => setMasterForm({ ...masterForm, content: e.target.value })}
-                      placeholder="Paste your full resume text here..."
-                      className="w-full border rounded-md px-3 py-2 text-sm bg-background min-h-[300px] resize-y font-mono"
-                    />
-                  )}
-                </div>
-
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={masterForm.make_default} onChange={(e) => setMasterForm({ ...masterForm, make_default: e.target.checked })} />
-                  <span className="text-sm">Set as default master resume</span>
-                </label>
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={savingMaster || extracting || (uploadMode === 'file' && !editingMaster && extractedText === null)}
-                >
-                  {savingMaster ? 'Saving...' : editingMaster ? 'Save Changes' : 'Add Master Resume'}
-                </Button>
-              </CardContent>
-            </form>
-          </Card>
-        </div>
+        <MasterResumeModal
+          editingMaster={editingMaster} masterForm={masterForm} setMasterForm={setMasterForm}
+          uploadMode={uploadMode} setUploadMode={setUploadMode} selectedFile={selectedFile}
+          dragActive={dragActive} extracting={extracting} extractedText={extractedText}
+          setExtractedText={setExtractedText} savingMaster={savingMaster}
+          onClose={closeMasterModal} onSave={handleSaveMaster}
+          onDrag={handleDrag} onDrop={handleDrop} onFileChange={handleFileSelect} onResetFile={resetFileState}
+        />
       )}
 
-
       {showAnalyzeModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <CardHeader className="flex flex-row items-center justify-between pb-4 flex-shrink-0">
-              <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> Analyze a Job</CardTitle>
-              <button onClick={() => !analyzing && setShowAnalyzeModal(false)} className="text-muted-foreground hover:text-foreground"><X className="h-5 w-5" /></button>
-            </CardHeader>
-            {analyzing ? (
-              <CardContent className="py-12 flex flex-col items-center gap-4">
-                <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                <div className="space-y-2 w-full max-w-sm">
-                  {STEPS.filter(s => s.id !== 'company' || analyzeForm.runCompanySearch).map((step, i) => (
-                    <div key={step.id} className={`flex items-center gap-2 text-sm transition-opacity ${i <= analyzeStep ? 'opacity-100' : 'opacity-30'}`}>
-                      <div className={`h-2 w-2 rounded-full flex-shrink-0 ${i < analyzeStep ? 'bg-green-500' : i === analyzeStep ? 'bg-primary animate-pulse' : 'bg-muted'}`} />
-                      {step.label}
-                    </div>
-                  ))}
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">This takes 20-40 seconds...</p>
-              </CardContent>
-            ) : (
-              <form onSubmit={handleRunAnalysis} className="flex flex-col flex-1 overflow-hidden">
-                <CardContent className="space-y-5 overflow-y-auto flex-1">
-                  <div className="space-y-1">
-                    <Label>Master Resume *</Label>
-                    <select required value={analyzeForm.masterId} onChange={(e) => setAnalyzeForm({ ...analyzeForm, masterId: e.target.value })} className="w-full border rounded-md px-3 py-2 text-sm bg-background">
-                      <option value="">Select a master resume...</option>
-                      {masters.map((m) => (
-                        <option key={m.id} value={m.id}>{m.variant_name}{m.is_default ? ' (default)' : ''}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Job Description *</Label>
-                    <div className="flex gap-2 text-sm">
-                      <button type="button" onClick={() => setAnalyzeForm({ ...analyzeForm, jobInputMode: 'paste' })} className={`px-3 py-1 rounded-md transition-colors ${analyzeForm.jobInputMode === 'paste' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Paste JD</button>
-                      <button type="button" onClick={() => setAnalyzeForm({ ...analyzeForm, jobInputMode: 'flagged' })} disabled={flaggedJobs.length === 0} className={`px-3 py-1 rounded-md transition-colors disabled:opacity-40 ${analyzeForm.jobInputMode === 'flagged' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>From Scored Jobs ({flaggedJobs.length})</button>
-                    </div>
-                    {analyzeForm.jobInputMode === 'paste' ? (
-                      <textarea required value={analyzeForm.jobDescription} onChange={(e) => setAnalyzeForm({ ...analyzeForm, jobDescription: e.target.value })} placeholder="Paste the full job description here..." className="w-full border rounded-md px-3 py-2 text-sm bg-background min-h-[160px] resize-y" />
-                    ) : (
-                      <select value={analyzeForm.selectedJobId} onChange={(e) => setAnalyzeForm({ ...analyzeForm, selectedJobId: e.target.value })} className="w-full border rounded-md px-3 py-2 text-sm bg-background" required={analyzeForm.jobInputMode === 'flagged'}>
-                        <option value="">Select a flagged job...</option>
-                        {flaggedJobs.map((j) => (
-                          <option key={j.id} value={j.id}>{j.canonical_title} - {j.company}</option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                  <div className="space-y-2 border rounded-lg p-3 bg-muted/30">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input type="checkbox" checked={analyzeForm.runCompanySearch} onChange={(e) => setAnalyzeForm({ ...analyzeForm, runCompanySearch: e.target.checked })} />
-                      <span className="text-sm font-medium">Company Research</span>
-                      <Badge variant="outline" className="text-xs ml-1">via Apify</Badge>
-                    </label>
-                    {analyzeForm.runCompanySearch && (
-                      <div className="space-y-1">
-                        <Label className="text-xs text-muted-foreground">Search query (editable)</Label>
-                        <Input value={analyzeForm.companySearchQuery} onChange={(e) => setAnalyzeForm({ ...analyzeForm, companySearchQuery: e.target.value })} placeholder={'"Company Name" news 2025 OR 2026'} className="text-sm" />
-                      </div>
-                    )}
-                  </div>
-                  <Button type="submit" className="w-full gap-2">
-                    <Sparkles className="h-4 w-4" /> Run Analysis
-                  </Button>
-                </CardContent>
-              </form>
-            )}
-          </Card>
-        </div>
+        <AnalyzeJobModal
+          masters={masters} flaggedJobs={flaggedJobs} analyzing={analyzing}
+          analyzeStep={analyzeStep} analyzeForm={analyzeForm} setAnalyzeForm={setAnalyzeForm}
+          onClose={() => setShowAnalyzeModal(false)} onSubmit={handleRunAnalysis}
+        />
       )}
     </div>
   )

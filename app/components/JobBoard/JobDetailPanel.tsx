@@ -8,8 +8,8 @@ import {
 } from 'lucide-react'
 import type { JobWithScore, SearchSourceName } from '@/lib/types'
 import { SkillSection } from './SkillSection'
-import { SkillPill } from '@/components/ui/SkillPill'
-import { FitScoreBadge } from '@/components/ui/FitScoreBadge'
+import { SkillPill } from '@/app/components/ui/SkillPill'
+import { FitScoreBadge } from '@/app/components/ui/FitScoreBadge'
 import { CompanyIntelTab } from './CompanyIntelTab'
 
 // ─── Constants ───────────────────────────────────────────────────────────────

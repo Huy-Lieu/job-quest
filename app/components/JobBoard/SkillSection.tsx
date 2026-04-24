@@ -1,6 +1,6 @@
 'use client'
 
-import { SkillPill } from '@/components/ui/SkillPill'
+import { SkillPill } from '@/app/components/ui/SkillPill'
 
 interface SkillSectionProps {
   title: string

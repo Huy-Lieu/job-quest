@@ -1,3 +1,5 @@
+'use client'
+
 type SkillVariant = 'required' | 'preferred' | 'tech' | 'matched' | 'missing' | 'default'
 
 const variantStyles: Record<SkillVariant, string> = {

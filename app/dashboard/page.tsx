@@ -6,8 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { StatCard } from '@/components/dashboard/StatCard'
-import { FitScoreBadge } from '@/components/ui/FitScoreBadge'
+import { StatCard } from '@/app/components/dashboard/StatCard'
+import { FitScoreBadge } from '@/app/components/ui/FitScoreBadge'
 import { Briefcase, Send, CalendarCheck, Trophy, Flame, Star, ArrowRight } from 'lucide-react'
 
 async function getOnboardingStatus(userId: string) {

@@ -1,3 +1,5 @@
+'use client'
+
 export function FitScoreBadge({ score }: { score: number | null }) {
   if (score === null) {
     return (
