@@ -71,9 +71,17 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
     }
   }
 
-  // Fire all actor runs in parallel
+  // Fire all actor runs in parallel.
+  // Workday bypasses the generic Apify RAG-browser actor and uses the direct
+  // Workday JSON API (fetchWorkdayBoard) which returns structured {title, company, …}
+  // fields that the normalizer can parse. The RAG-browser returns markdown blobs
+  // with no structured fields, causing 0 jobs to survive the normalizer filter.
   const settled = await Promise.allSettled(
     enabledSources.map(source => {
+      if (source.name === 'workday') {
+        return runWorkdayBoards(workdayTenants, query)
+          .then(items => ({ source: source.label, items }))
+      }
       const input = source.buildInput(keywords, locations, optionsFor(source.name))
       return runApifyActor(source.actorId, input)
         .then(items => ({ source: source.label, items }))
@@ -211,3 +219,15 @@ async function runWorkdayBoards(
   return settled.flatMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
 }
 
+latMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
+}
+
+/** Fan out Workday fetches across tenants; each tenant is {tenant, dc, site}. */
+async function runWorkdayBoards(
+  tenants: WorkdayTenant[],
+  query:   string
+): Promise<RawApifyJob[]> {
+  if (tenants.length === 0) return []
+  const settled = await Promise.allSettled(tenants.map(t => sources.fetchWorkdayBoard(t, query)))
+  return settled.flatMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
+}

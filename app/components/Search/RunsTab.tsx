@@ -60,38 +60,40 @@ export function RunsTab({ runs, loadingRuns, fetchRuns }: RunsTabProps) {
         runs.map((run) => {
           const status = effectiveStatus(run)
           return (
-          <Card key={run.id}>
-            <CardContent className="py-4">
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <RunStatusIcon status={status} />
-                  <div>
-                    <p className="text-sm font-medium">
-                      {statusLabel(status)}
-                      {run.search_configs?.name ? ` — ${run.search_configs.name}` : ''}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(run.started_at).toLocaleString('en-US', {
-                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-                      })}
-                      {run.completed_at && ` · ${Math.round(
-                        (new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()) / 1000
-                      )}s`}
-                    </p>
+            <Card key={run.id}>
+              <CardContent className="py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <RunStatusIcon status={status} />
+                    <div>
+                      <p className="text-sm font-medium">
+                        {statusLabel(status)}
+                        {run.search_configs?.name ? ` — ${run.search_configs.name}` : ''}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(run.started_at).toLocaleString('en-US', {
+                          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                        })}
+                        {run.completed_at && ` · ${Math.round(
+                          (new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()) / 1000
+                        )}s`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                    <span><span className="font-medium text-foreground">{run.jobs_found}</span> found</span>
+                    <span><span className="font-medium text-foreground">{run.jobs_new}</span> new</span>
+                    <span><span className="font-medium text-foreground">{run.jobs_scored}</span> scored</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <span><span className="font-medium text-foreground">{run.jobs_found}</span> found</span>
-                  <span><span className="font-medium text-foreground">{run.jobs_new}</span> new</span>
-                  <span><span className="font-medium text-foreground">{run.jobs_scored}</span> scored</span>
-                </div>
-              </div>
-              {run.error_text && <p className="mt-2 text-xs text-red-500">{run.error_text}</p>}
-              {status === 'timeout' && !run.error_text && (
-                <p className="mt-2 text-xs text-orange-500">Run timed out (server restarted or pipeline crashed)</p>
-              )}
-            </CardContent>
-          </Card>
+                {run.error_text && (
+                  <p className="mt-2 text-xs text-red-500">{run.error_text}</p>
+                )}
+                {status === 'timeout' && !run.error_text && (
+                  <p className="mt-2 text-xs text-orange-500">Run timed out (server restarted or pipeline crashed)</p>
+                )}
+              </CardContent>
+            </Card>
           )
         })
       )}
