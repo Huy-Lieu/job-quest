@@ -323,16 +323,21 @@ async function runPipeline(
       // job_scores
       if (scores.length > 0) {
         const scoresToInsert = scores
-          .map((s, i) => ({
-            job_id:         hashToJobId.get(enrichedNewJobs[i]?.raw_hash ?? ''),
-            user_id:        userId,
-            fit_score:      s.fit_score,
-            fit_reason:     s.fit_reason,
-            skills_matched: s.skills_matched,
-            skills_missing: s.skills_missing,
-            recommended:    s.recommended,
-          }))
-          .filter(s => s.job_id)
+          .map((s, i) => {
+            if (!s) return null
+            const jobId = hashToJobId.get(enrichedNewJobs[i]?.raw_hash ?? '')
+            if (!jobId) return null
+            return {
+              job_id:         jobId,
+              user_id:        userId,
+              fit_score:      s.fit_score,
+              fit_reason:     s.fit_reason,
+              skills_matched: s.skills_matched,
+              skills_missing: s.skills_missing,
+              recommended:    s.recommended,
+            }
+          })
+          .filter(Boolean)
 
         if (scoresToInsert.length > 0) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

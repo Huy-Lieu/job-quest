@@ -7,7 +7,7 @@
 
 import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
-import { isFuzzyDuplicate } from '@/lib/claude/dedup'
+import { areFuzzyDuplicates, type DedupPair } from '@/lib/claude/dedup'
 import type { NormalizedJob } from '@/lib/pipeline/normalize'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -81,23 +81,24 @@ export async function deduplicateJobs(
 
     // ── Stage 3: Claude Haiku fuzzy match ─────────────────────────────────────
     // Only compare against same-company jobs already accepted this run.
-    // Avoids O(n²) Claude calls — at most a handful of same-company pairs.
+    // All pairs for this job are sent in a single batched Claude call.
     const sameCompanyCandidates = newJobs.filter(
       j => j.company.toLowerCase() === job.company.toLowerCase()
     )
 
-    let fuzzyDup = false
-    for (const candidate of sameCompanyCandidates) {
-      const isDup = await isFuzzyDuplicate(job, candidate)
-      if (isDup) {
-        fuzzyDup = true
-        break
-      }
-    }
+    if (sameCompanyCandidates.length > 0) {
+      const pairs: DedupPair[] = sameCompanyCandidates.map(candidate => ({
+        jobA: job,
+        jobB: candidate,
+      }))
 
-    if (fuzzyDup) {
-      filteredByFuzzy++
-      continue
+      const results = await areFuzzyDuplicates(pairs)
+      const fuzzyDup = results.some(Boolean)
+
+      if (fuzzyDup) {
+        filteredByFuzzy++
+        continue
+      }
     }
 
     // ── Unique — accept ───────────────────────────────────────────────────────
