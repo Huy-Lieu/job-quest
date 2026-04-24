@@ -387,3 +387,22 @@ async function runPipeline(
 
   close()
 }
+
+export async function DELETE(request: Request) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { searchParams } = new URL(request.url)
+  const runId = searchParams.get('runId')
+  if (!runId) return NextResponse.json({ error: 'runId is required' }, { status: 400 })
+
+  const { error } = await (supabaseAdmin as any)
+    .from('search_runs')
+    .update({ status: 'cancelled', completed_at: new Date().toISOString(), error_text: 'Cancelled by user' })
+    .eq('id', runId)
+    .eq('user_id', session.user.id)
+    .eq('status', 'running')
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}

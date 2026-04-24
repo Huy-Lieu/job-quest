@@ -5,10 +5,28 @@ import { Button } from '@/components/ui/button'
 import { Loader2, Clock, RefreshCw, CheckCircle2, XCircle } from 'lucide-react'
 import type { SearchRun } from '@/lib/types'
 
+/** A run stuck in 'running' with an error or started >10 min ago is considered stale/crashed */
+function isStale(run: SearchRun): boolean {
+  if (run.status !== 'running') return false
+  if (run.error_text) return true
+  const ageMs = Date.now() - new Date(run.started_at).getTime()
+  return ageMs > 10 * 60 * 1000
+}
+
+function effectiveStatus(run: SearchRun): string {
+  return isStale(run) ? 'timeout' : run.status
+}
+
 function RunStatusIcon({ status }: { status: string }) {
-  if (status === 'complete') return <CheckCircle2 className="h-4 w-4 text-green-500" />
-  if (status === 'failed')   return <XCircle className="h-4 w-4 text-red-500" />
+  if (status === 'complete')                          return <CheckCircle2 className="h-4 w-4 text-green-500" />
+  if (status === 'failed')                            return <XCircle className="h-4 w-4 text-red-500" />
+  if (status === 'cancelled' || status === 'timeout') return <XCircle className="h-4 w-4 text-orange-500" />
   return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
+}
+
+function statusLabel(status: string): string {
+  if (status === 'timeout') return 'Timed out'
+  return status.charAt(0).toUpperCase() + status.slice(1)
 }
 
 interface RunsTabProps {
@@ -39,15 +57,17 @@ export function RunsTab({ runs, loadingRuns, fetchRuns }: RunsTabProps) {
           </CardContent>
         </Card>
       ) : (
-        runs.map((run) => (
+        runs.map((run) => {
+          const status = effectiveStatus(run)
+          return (
           <Card key={run.id}>
             <CardContent className="py-4">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <RunStatusIcon status={run.status} />
+                  <RunStatusIcon status={status} />
                   <div>
-                    <p className="text-sm font-medium capitalize">
-                      {run.status}
+                    <p className="text-sm font-medium">
+                      {statusLabel(status)}
                       {run.search_configs?.name ? ` — ${run.search_configs.name}` : ''}
                     </p>
                     <p className="text-xs text-muted-foreground">
@@ -67,9 +87,13 @@ export function RunsTab({ runs, loadingRuns, fetchRuns }: RunsTabProps) {
                 </div>
               </div>
               {run.error_text && <p className="mt-2 text-xs text-red-500">{run.error_text}</p>}
+              {status === 'timeout' && !run.error_text && (
+                <p className="mt-2 text-xs text-orange-500">Run timed out (server restarted or pipeline crashed)</p>
+              )}
             </CardContent>
           </Card>
-        ))
+          )
+        })
       )}
     </div>
   )
