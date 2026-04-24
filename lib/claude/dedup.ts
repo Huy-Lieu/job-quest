@@ -62,7 +62,9 @@ export async function areFuzzyDuplicates(pairs: DedupPair[]): Promise<boolean[]>
       messages: [{ role: 'user', content: userPrompt }],
     })
 
-    const raw = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]'
+    const rawText = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]'
+    // Strip markdown code fences Claude sometimes wraps around JSON output
+    const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
     const parsed = JSON.parse(raw)
 
     if (!Array.isArray(parsed) || parsed.length !== pairs.length) {

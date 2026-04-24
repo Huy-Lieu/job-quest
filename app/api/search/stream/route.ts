@@ -8,6 +8,7 @@ import { authOptions }      from '@/lib/auth'
 import { supabaseAdmin }    from '@/lib/supabase'
 
 import { orchestrateApify }  from '@/lib/apify/orchestrate'
+import { cancelRun, isCancelled, clearCancellation } from '@/lib/search/cancellation'
 import { searchGoogleJobs }  from '@/lib/serp/search'
 import { normalizeJob }      from '@/lib/pipeline/normalize'
 import { normalizeSerpJob }  from '@/lib/serp/normalize'
@@ -147,6 +148,15 @@ async function runPipeline(
     close()
   }
 
+  /** Abort early if the user cancelled this run. */
+  async function checkCancelled(): Promise<boolean> {
+    if (!isCancelled(runId)) return false
+    clearCancellation(runId)
+    emit('cancelled', { message: 'Search cancelled by user' })
+    close()
+    return true
+  }
+
   try {
     // ── Load active resume ────────────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -190,6 +200,8 @@ async function runPipeline(
       console.error('[search/stream] SerpAPI failed:', serpResult.reason)
     }
 
+    if (await checkCancelled()) return
+
     // ── Stage 2: Normalize ────────────────────────────────────────────────────
     await progress({ stage: 'normalizing', progress: 25, message: 'Normalizing results...' })
 
@@ -202,6 +214,8 @@ async function runPipeline(
 
     await progress({ stage: 'normalizing', progress: 25, found: allNormalized.length })
 
+    if (await checkCancelled()) return
+
     // ── Stage 3: Enrich ───────────────────────────────────────────────────────
     await progress({ stage: 'enriching', progress: 45, message: 'Enriching with Claude Haiku...' })
 
@@ -210,6 +224,8 @@ async function runPipeline(
       : []
 
     await progress({ stage: 'enriching', progress: 45, enriched: enrichedFields.length })
+
+    if (await checkCancelled()) return
 
     // ── Stage 4: Deduplicate ──────────────────────────────────────────────────
     await progress({ stage: 'deduplicating', progress: 60, message: 'Deduplicating...' })
@@ -240,6 +256,8 @@ async function runPipeline(
 
     await progress({ stage: 'deduplicating', progress: 60, unique: newJobs.length })
 
+    if (await checkCancelled()) return
+
     // ── Stage 5: Score ────────────────────────────────────────────────────────
     await progress({ stage: 'scoring', progress: 80, message: 'Scoring with Claude Sonnet...' })
 
@@ -249,6 +267,8 @@ async function runPipeline(
     }
 
     await progress({ stage: 'scoring', progress: 80, scored: scores.length })
+
+    if (await checkCancelled()) return
 
     // ── Stage 6: Store ────────────────────────────────────────────────────────
     let insertedCount = 0
@@ -296,8 +316,10 @@ async function runPipeline(
       insertedCount        = insertedJobs.length
       const hashToJobId    = new Map(insertedJobs.map(j => [j.raw_hash, j.id]))
 
-      // job_sources
-      const sourcesToInsert = enrichedNewJobs
+      // job_sources — split on whether source_job_id is present.
+      // NULL values can't participate in the unique conflict target, so rows
+      // without a source_job_id are inserted separately with ignoreDuplicates.
+      const allSources = enrichedNewJobs
         .map(nj => {
           const jobId = hashToJobId.get(nj.raw_hash)
           if (!jobId) return null
@@ -305,18 +327,31 @@ async function runPipeline(
             job_id:        jobId,
             source_name:   nj.source.name,
             source_url:    nj.source.url,
-            source_job_id: nj.source.source_job_id,
+            source_job_id: nj.source.source_job_id ?? null,
           }
         })
-        .filter(Boolean)
+        .filter(Boolean) as { job_id: string; source_name: string; source_url: string; source_job_id: string | null }[]
 
-      if (sourcesToInsert.length > 0) {
+      const withId    = allSources.filter(s => s.source_job_id !== null)
+      const withoutId = allSources.filter(s => s.source_job_id === null)
+
+      if (withId.length > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { error: sourcesError } = await (supabaseAdmin as any)
           .from('job_sources')
-          .upsert(sourcesToInsert, { onConflict: 'source_name,source_job_id', ignoreDuplicates: true })
+          .upsert(withId, { onConflict: 'source_name,source_job_id', ignoreDuplicates: true })
         if (sourcesError) {
-          console.error('[search/stream] job_sources upsert failed:', String(sourcesError))
+          console.error('[search/stream] job_sources upsert failed:', JSON.stringify(sourcesError))
+        }
+      }
+
+      if (withoutId.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: sourcesError } = await (supabaseAdmin as any)
+          .from('job_sources')
+          .insert(withoutId)
+        if (sourcesError) {
+          console.error('[search/stream] job_sources insert (no id) failed:', JSON.stringify(sourcesError))
         }
       }
 
@@ -385,6 +420,7 @@ async function runPipeline(
     return
   }
 
+  clearCancellation(runId)
   close()
 }
 
@@ -395,6 +431,9 @@ export async function DELETE(request: Request) {
   const { searchParams } = new URL(request.url)
   const runId = searchParams.get('runId')
   if (!runId) return NextResponse.json({ error: 'runId is required' }, { status: 400 })
+
+  // Signal the in-flight pipeline to abort between stages
+  cancelRun(runId)
 
   const { error } = await (supabaseAdmin as any)
     .from('search_runs')

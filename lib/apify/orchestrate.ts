@@ -34,8 +34,8 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
     return []
   }
 
-  const query    = config.keywords.join(' OR ')
-  const keywords = config.keywords
+  const query     = config.keywords.join(' OR ')
+  const keywords  = config.keywords
   const locations = config.locations ?? []
 
   // Pre-resolve URL-targeted source options once, shared across relevant sources
@@ -73,7 +73,7 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
 
   // Fire all actor runs in parallel.
   // Workday bypasses the generic Apify RAG-browser actor and uses the direct
-  // Workday JSON API (fetchWorkdayBoard) which returns structured {title, company, …}
+  // Workday JSON API (fetchWorkdayBoard) which returns structured {title, company, ...}
   // fields that the normalizer can parse. The RAG-browser returns markdown blobs
   // with no structured fields, causing 0 jobs to survive the normalizer filter.
   const settled = await Promise.allSettled(
@@ -98,7 +98,7 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
 
     if (result.status === 'fulfilled') {
       const { items } = result.value
-      console.log(`[apify/orchestrate] ${sourceName} → ${items.length} items`)
+      console.log(`[apify/orchestrate] ${sourceName} -> ${items.length} items`)
       allJobs.push(...items)
       totalJobs += items.length
     } else {
@@ -118,8 +118,8 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
  */
 export async function runFullSearch(config: SearchConfig): Promise<Record<string, RawApifyJob[]>> {
   const enabledSources = getEnabledSources(config)
-  const query    = config.keywords.join(' OR ')
-  const keywords = config.keywords
+  const query     = config.keywords.join(' OR ')
+  const keywords  = config.keywords
   const locations = config.locations ?? []
 
   const atsSlugs       = resolveAtsSlugs(config.career_page_urls ?? [], config.target_companies)
@@ -130,13 +130,13 @@ export async function runFullSearch(config: SearchConfig): Promise<Record<string
 
   function optionsFor(sourceName: string) {
     switch (sourceName) {
-      case 'greenhouse': return { targetUrls: buildAtsUrls('greenhouse', atsSlugs.greenhouse), targetCompanies: config.target_companies }
-      case 'lever':      return { targetUrls: buildAtsUrls('lever', atsSlugs.lever) }
-      case 'ashby':      return { targetUrls: buildAtsUrls('ashby', atsSlugs.ashby) }
-      case 'workday':    return { targetUrls: workdayTenants.map(t => `https://${t.tenant}.${t.dc}.myworkdayjobs.com/${t.site}`) }
+      case 'greenhouse':  return { targetUrls: buildAtsUrls('greenhouse', atsSlugs.greenhouse), targetCompanies: config.target_companies }
+      case 'lever':       return { targetUrls: buildAtsUrls('lever', atsSlugs.lever) }
+      case 'ashby':       return { targetUrls: buildAtsUrls('ashby', atsSlugs.ashby) }
+      case 'workday':     return { targetUrls: workdayTenants.map(t => `https://${t.tenant}.${t.dc}.myworkdayjobs.com/${t.site}`) }
       case 'career_page': return { targetUrls: careerPageUrls }
-      case 'linkedin':   return { targetCompanies: config.target_companies }
-      default: return {}
+      case 'linkedin':    return { targetCompanies: config.target_companies }
+      default:            return {}
     }
   }
 
@@ -151,7 +151,7 @@ export async function runFullSearch(config: SearchConfig): Promise<Record<string
     const name   = enabledSources[i].name
     const result = settled[i]
     if (result.status === 'fulfilled') {
-      console.log(`[apify/orchestrate] ${name} → ${result.value.length} items`)
+      console.log(`[apify/orchestrate] ${name} -> ${result.value.length} items`)
       out[name] = result.value
     } else {
       console.warn(`[apify/orchestrate] ${name} FAILED:`, result.reason instanceof Error ? result.reason.message : result.reason)
@@ -160,10 +160,7 @@ export async function runFullSearch(config: SearchConfig): Promise<Record<string
   }
 
   // Also include legacy ATS-specific fetchers for sources not in the Apify registry
-  // (lever, ashby, smartrecruiters, workable, recruitee, teamtailor, personio use
-  //  direct JSON APIs rather than Apify actors)
   const legacyEnabled = new Set(config.sources)
-
   const legacySources: Array<[string, Promise<RawApifyJob[]>]> = []
 
   if (legacyEnabled.has('lever') && atsSlugs.lever.length)
@@ -207,19 +204,6 @@ async function runAtsBoards(
   if (slugs.length === 0) return []
   const settled = await Promise.allSettled(slugs.map(s => fetcher(s)))
   return settled.flatMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
-}
-
-/** Fan out Workday fetches across tenants; each tenant is {tenant, dc, site}. */
-async function runWorkdayBoards(
-  tenants: WorkdayTenant[],
-  query:   string
-): Promise<RawApifyJob[]> {
-  if (tenants.length === 0) return []
-  const settled = await Promise.allSettled(tenants.map(t => sources.fetchWorkdayBoard(t, query)))
-  return settled.flatMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
-}
-
-latMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
 }
 
 /** Fan out Workday fetches across tenants; each tenant is {tenant, dc, site}. */
