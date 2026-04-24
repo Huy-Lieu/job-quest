@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   MapPin, Building2, ExternalLink, Loader2,
   Play, Clock, Settings2, ChevronDown, ChevronUp, CheckCircle2,
-  XCircle, RefreshCw, Plus, Trash2, Zap, GraduationCap,
+  XCircle, RefreshCw, Plus, Trash2, Zap, GraduationCap, Bookmark,
 } from 'lucide-react'
 import type { JobWithScore, SearchConfig, SearchRun, SearchSourceName, ScheduleInterval } from '@/lib/types'
 import { SkillPill } from '@/components/ui/SkillPill'
@@ -64,7 +64,19 @@ const SOURCE_COLORS: Record<SearchSourceName, string> = {
 
 const AVAILABLE_SOURCES: SearchSourceName[] = ['linkedin', 'indeed', 'google', 'career_page', 'greenhouse', 'phd']
 
-type Tab = 'jobs' | 'configs' | 'runs'
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface WatchlistEntry {
+  id: string
+  name: string
+  institution: string
+  research_area: string | null
+  profile_url: string | null
+  notes: string | null
+  created_at: string
+}
+
+type Tab = 'jobs' | 'configs' | 'runs' | 'watchlist'
 
 // ─── Score badge ─────────────────────────────────────────────────────────────
 
@@ -446,6 +458,245 @@ function RunStatusIcon({ status }: { status: string }) {
   return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />
 }
 
+// ─── Watchlist Tab ────────────────────────────────────────────────────────────
+
+function WatchlistTab({
+  watchlist,
+  loading,
+  onAdded,
+  onDeleted,
+}: {
+  watchlist: WatchlistEntry[]
+  loading: boolean
+  onAdded: (entry: WatchlistEntry) => void
+  onDeleted: (id: string) => void
+}) {
+  const [open, setOpen]       = useState(false)
+  const [formData, setFormData] = useState({
+    name: '',
+    institution: '',
+    research_area: '',
+    profile_url: '',
+    notes: '',
+  })
+  const [saving, setSaving]   = useState(false)
+  const [error, setError]     = useState('')
+  const [deleteError, setDeleteError] = useState('')
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+
+    if (!formData.name.trim() || !formData.institution.trim()) {
+      setError('Name and institution are required')
+      setSaving(false)
+      return
+    }
+
+    try {
+      const res = await fetch('/api/watchlist', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formData.name.trim(),
+          institution: formData.institution.trim(),
+          research_area: formData.research_area.trim() || undefined,
+          profile_url: formData.profile_url.trim() || undefined,
+          notes: formData.notes.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setError(data.error ?? 'Failed to add professor')
+        setSaving(false)
+        return
+      }
+
+      onAdded(data)
+      setFormData({
+        name: '',
+        institution: '',
+        research_area: '',
+        profile_url: '',
+        notes: '',
+      })
+      setOpen(false)
+      setSaving(false)
+    } catch {
+      setError('Network error — please try again')
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setDeleteError('')
+    try {
+      const res = await fetch(`/api/watchlist/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        setDeleteError('Failed to delete professor')
+        return
+      }
+      onDeleted(id)
+    } catch {
+      setDeleteError('Network error — please try again')
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading watchlist…
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Add form */}
+      <div>
+        <Button variant="outline" className="gap-2" onClick={() => setOpen((v) => !v)}>
+          <Plus className="h-4 w-4" /> Add Professor
+        </Button>
+
+        {open && (
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle className="text-base">Add Professor to Watchlist</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Name <span className="text-red-500">*</span></label>
+                  <Input
+                    placeholder="e.g. Dr. Jane Smith"
+                    value={formData.name}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Institution <span className="text-red-500">*</span></label>
+                  <Input
+                    placeholder="e.g. MIT, Stanford"
+                    value={formData.institution}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, institution: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Research Area</label>
+                  <Input
+                    placeholder="e.g. Machine Learning, Robotics"
+                    value={formData.research_area}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, research_area: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Profile URL</label>
+                  <Input
+                    placeholder="e.g. https://example.com/profile"
+                    value={formData.profile_url}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, profile_url: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Notes</label>
+                  <Input
+                    placeholder="e.g. Potential advisor for PhD"
+                    value={formData.notes}
+                    onChange={(e) => setFormData((prev) => ({ ...prev, notes: e.target.value }))}
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={saving} className="gap-1">
+                    {saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving…</> : 'Save'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* Error */}
+      {deleteError && (
+        <Alert variant="destructive">
+          <AlertDescription>{deleteError}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Empty state */}
+      {watchlist.length === 0 && !open && (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <Bookmark className="h-10 w-10 text-muted-foreground mb-3 opacity-30" />
+            <p className="font-semibold">No professors saved yet</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              Add one above to start tracking potential advisors.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* List */}
+      {watchlist.length > 0 && (
+        <div className="space-y-3">
+          {watchlist.map((entry) => (
+            <Card key={entry.id}>
+              <CardContent className="py-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold">{entry.name}</p>
+                    <p className="text-sm text-muted-foreground">{entry.institution}</p>
+                    {entry.research_area && (
+                      <p className="text-xs text-muted-foreground mt-1">Research: {entry.research_area}</p>
+                    )}
+                    {entry.notes && (
+                      <p className="text-xs text-muted-foreground mt-1">Notes: {entry.notes}</p>
+                    )}
+                    {entry.profile_url && (
+                      <div className="mt-2">
+                        <a
+                          href={entry.profile_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                        >
+                          <ExternalLink className="h-3 w-3" /> Profile
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-red-500"
+                    onClick={() => handleDelete(entry.id)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function PhDPage() {
@@ -471,6 +722,10 @@ export default function PhDPage() {
   // Runs tab state
   const [runs, setRuns]           = useState<SearchRun[]>([])
   const [loadingRuns, setLoadingRuns] = useState(false)
+
+  // Watchlist tab state
+  const [watchlist, setWatchlist]             = useState<WatchlistEntry[]>([])
+  const [loadingWatchlist, setLoadingWatchlist] = useState(false)
 
   const LIMIT = 20
 
@@ -528,6 +783,16 @@ export default function PhDPage() {
     }
   }, [])
 
+  const fetchWatchlist = useCallback(async () => {
+    setLoadingWatchlist(true)
+    try {
+      const res = await fetch('/api/watchlist')
+      if (res.ok) setWatchlist(await res.json())
+    } finally {
+      setLoadingWatchlist(false)
+    }
+  }, [])
+
   // ── Initial loads ───────────────────────────────────────────────────────────
 
   useEffect(() => { fetchJobs(0) },   [fetchJobs])
@@ -535,6 +800,9 @@ export default function PhDPage() {
   useEffect(() => {
     if (tab === 'runs') fetchRuns()
   }, [tab, fetchRuns])
+  useEffect(() => {
+    if (tab === 'watchlist') fetchWatchlist()
+  }, [tab, fetchWatchlist])
 
   useEffect(() => { fetchJobs(0) }, [minScore, source, jobType, recommendedOnly, fetchJobs])
 
@@ -544,6 +812,7 @@ export default function PhDPage() {
     { key: 'jobs',    label: 'Positions', icon: <GraduationCap className="h-3.5 w-3.5" />, count: total || undefined },
     { key: 'configs', label: 'Configs',   icon: <Settings2 className="h-3.5 w-3.5" />,    count: configs.length || undefined },
     { key: 'runs',    label: 'Runs',      icon: <Clock className="h-3.5 w-3.5" /> },
+    { key: 'watchlist', label: 'Watchlist', icon: <Bookmark className="h-3.5 w-3.5" />, count: watchlist.length || undefined },
   ]
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -870,6 +1139,16 @@ export default function PhDPage() {
             ))
           )}
         </div>
+      )}
+
+      {/* ── Watchlist Tab ────────────────────────────────────────────────────── */}
+      {tab === 'watchlist' && (
+        <WatchlistTab
+          watchlist={watchlist}
+          loading={loadingWatchlist}
+          onAdded={(entry) => setWatchlist((prev) => [entry, ...prev])}
+          onDeleted={(id) => setWatchlist((prev) => prev.filter((e) => e.id !== id))}
+        />
       )}
     </div>
   )

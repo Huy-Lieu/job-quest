@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -14,6 +15,7 @@ import {
 import type { JobWithScore, SearchConfig, SearchRun, SearchSourceName, ScheduleInterval } from '@/lib/types'
 import { SkillPill } from '@/components/ui/SkillPill'
 import { toast } from 'sonner'
+import { ManualPasteModal } from '@/app/components/Search/ManualPasteModal'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -529,6 +531,15 @@ function SkillChips({ skills }: { skills: string[] }) {
       {extra > 0 && (
         <span className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">+{extra}</span>
       )}
+      <ManualPasteModal
+        open={pasteOpen}
+        onClose={() => setPasteOpen(false)}
+        onJobAdded={(job) => {
+          setJobs((prev) => [job, ...prev])
+          setTotal((prev) => prev + 1)
+          setPasteOpen(false)
+        }}
+      />
     </div>
   )
 }
@@ -1205,6 +1216,12 @@ function NewConfigForm({
   const [schedule, setSchedule]   = useState<ScheduleInterval>(
     initialValues?.schedule_interval ?? 'daily'
   )
+  const [careerPageUrls, setCareerPageUrls] = useState(
+    (initialValues?.career_page_urls ?? []).join('\n'),
+  )
+  const [serpEnabled, setSerpEnabled] = useState(
+    initialValues?.serp_enabled ?? false,
+  )
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
 
@@ -1216,7 +1233,7 @@ function NewConfigForm({
 
   function resetCreateFields() {
     setName(''); setKeywords(''); setCompanies(''); setLocations('United States')
-    setSources([...AVAILABLE_SOURCES]); setSchedule('daily')
+    setSources([...AVAILABLE_SOURCES]); setSchedule('daily'); setCareerPageUrls(''); setSerpEnabled(false)
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -1230,6 +1247,8 @@ function NewConfigForm({
       target_companies:  companies.split(',').map((c) => c.trim()).filter(Boolean),
       locations:         locations.split(',').map((l) => l.trim()).filter(Boolean),
       sources,
+      career_page_urls: careerPageUrls.split('\n').map((u) => u.trim()).filter(Boolean),
+      serp_enabled: serpEnabled,
       schedule_interval: schedule,
     }
 
@@ -1287,6 +1306,29 @@ function NewConfigForm({
                 <label className="text-sm font-medium">Locations</label>
                 <Input placeholder="United States, Remote" value={locations} onChange={(e) => setLocations(e.target.value)} />
               </div>
+
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Career Page URLs</label>
+                <Textarea
+                  placeholder={'https://stripe.com/jobs\nhttps://notion.so/careers'}
+                  value={careerPageUrls}
+                  onChange={(e) => setCareerPageUrls(e.target.value)}
+                  rows={3}
+                  className="font-mono text-xs"
+                />
+                <p className="text-xs text-muted-foreground">One URL per line — scrapes directly from company career pages</p>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={serpEnabled}
+                  onChange={(e) => setSerpEnabled(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="font-medium">Enable Google Jobs (SerpAPI)</span>
+                <span className="text-xs text-muted-foreground">— broader coverage, uses API quota</span>
+              </label>
 
               <div className="space-y-1">
                 <label className="text-sm font-medium">Sources</label>
@@ -1550,6 +1592,7 @@ export default function JobsPage() {
   // hasn't registered status='running' yet). Merged below with runs-table
   // state so a page reload still sees the in-flight search as running.
   const [optimisticRunningIds, setOptimisticRunningIds] = useState<Set<string>>(new Set())
+  const [pasteOpen, setPasteOpen] = useState(false)
 
   const serverRunningIds = new Set(
     runs
@@ -1574,23 +1617,61 @@ export default function JobsPage() {
       duration: Infinity,
     })
     try {
-      const res  = await fetch('/api/search/run', {
+      const res = await fetch('/api/search/stream', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ configId }),
       })
-      const data = await res.json()
-      if (!res.ok) {
-        toast.error(`Search failed: ${data.error ?? 'Unknown error'}`, { id: toastId, duration: 6000 })
+
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}))
+        toast.error(`Search failed: ${(data as { error?: string }).error ?? 'Unknown error'}`, { id: toastId, duration: 6000 })
         return
       }
-      toast.success(
-        `Search complete — ${data.jobsFound} found · ${data.jobsNew} new · ${data.jobsScored} scored`,
-        { id: toastId, duration: 5000 },
-      )
-      fetchJobs(0)
-      fetchRuns()
-      if (opts?.switchToRunsTab) setTab('runs')
+
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer    = ''
+
+      const stageLabel: Record<string, string> = {
+        scraping:      'Scraping job boards…',
+        normalizing:   'Normalizing results…',
+        enriching:     'Enriching jobs with Claude…',
+        deduplicating: 'Deduplicating…',
+        scoring:       'Scoring jobs against your resume…',
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('
+')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const payload = JSON.parse(line.slice(6)) as {
+              stage?: string; found?: number; unique?: number; scored?: number; message?: string
+            }
+            if (payload.stage === 'complete') {
+              toast.success(
+                `Search complete — ${payload.found ?? 0} found · ${payload.unique ?? 0} new · ${payload.scored ?? 0} scored`,
+                { id: toastId, duration: 5000 },
+              )
+              fetchJobs(0)
+              fetchRuns()
+              if (opts?.switchToRunsTab) setTab('runs')
+              return
+            }
+            // Update toast with live stage label, enriching with count if available
+            let label = stageLabel[payload.stage ?? ''] ?? payload.message ?? 'Running…'
+            if (payload.stage === 'enriching'     && payload.found)  label = `Enriching ${payload.found} jobs…`
+            if (payload.stage === 'scoring'       && payload.unique) label = `Scoring ${payload.unique} jobs against your resume…`
+            toast.loading(label, { id: toastId, duration: Infinity })
+          } catch { /* ignore parse errors */ }
+        }
+      }
     } catch {
       toast.error('Network error — please try again', { id: toastId, duration: 6000 })
     } finally {
@@ -1702,7 +1783,12 @@ export default function JobsPage() {
             AI-scored jobs from LinkedIn, Indeed, Google Jobs, and company career pages. PhD positions are in the <strong>PhD Search</strong> tab.
           </p>
         </div>
-        <RunSearchPanel configs={configs} runningConfigIds={runningConfigIds} runSearch={runSearch} />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" className="gap-2" onClick={() => setPasteOpen(true)}>
+            <Plus className="h-4 w-4" /> Add Manually
+          </Button>
+          <RunSearchPanel configs={configs} runningConfigIds={runningConfigIds} runSearch={runSearch} />
+        </div>
       </div>
 
       {/* Tabs */}

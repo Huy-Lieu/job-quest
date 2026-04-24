@@ -11,35 +11,54 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 
 export default function RegisterPage() {
   const router = useRouter()
-  const [name, setName] = useState('')
+  const [fullName, setFullName] = useState('')
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  function validate(): string | null {
+    if (!inviteCode.trim()) return 'Invite code is required'
+    if (!fullName.trim()) return 'Full name is required'
+    if (!username.trim()) return 'Username is required'
+    if (/\s/.test(username)) return 'Username cannot contain spaces'
+    if (password.length < 8) return 'Password must be at least 8 characters'
+    if (password !== confirmPassword) return 'Passwords do not match'
+    return null
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
+
+    const validationError = validate()
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
     setLoading(true)
 
     try {
-      const response = await fetch('/api/auth/register', {
+      const response = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ fullName, username, email: email || undefined, password, inviteCode }),
       })
 
       const data = await response.json()
 
       if (!response.ok) {
-        setError(data.error || 'Registration failed')
+        setError(data.error || 'Registration failed. Please try again.')
         return
       }
 
-      router.push('/dashboard')
-    } catch (err) {
+      router.push('/login?registered=true')
+    } catch {
       setError('An error occurred. Please try again.')
-      console.error('Registration error:', err)
     } finally {
       setLoading(false)
     }
@@ -62,28 +81,54 @@ export default function RegisterPage() {
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
+              <Label htmlFor="inviteCode">Invite Code</Label>
               <Input
-                id="name"
-                type="text"
-                placeholder="Your name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                id="inviteCode"
+                type="password"
+                placeholder="••••••••••••"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
                 required
-                autoComplete="name"
                 autoFocus
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="fullName">Full Name</Label>
+              <Input
+                id="fullName"
+                type="text"
+                placeholder="Jane Smith"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                required
+                autoComplete="name"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="username">Username</Label>
+              <Input
+                id="username"
+                type="text"
+                placeholder="janesmith"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.replace(/\s/g, ''))}
+                required
+                autoComplete="username"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="email">
+                Email <span className="text-muted-foreground text-xs">(optional)</span>
+              </Label>
               <Input
                 id="email"
                 type="email"
-                placeholder="your@email.com"
+                placeholder="jane@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                required
                 autoComplete="email"
               />
             </div>
@@ -93,9 +138,22 @@ export default function RegisterPage() {
               <Input
                 id="password"
                 type="password"
-                placeholder=""
+                placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="confirmPassword">Confirm Password</Label>
+              <Input
+                id="confirmPassword"
+                type="password"
+                placeholder="••••••••"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
                 required
                 autoComplete="new-password"
               />
@@ -104,7 +162,7 @@ export default function RegisterPage() {
 
           <CardFooter className="flex flex-col space-y-4">
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Creating account...' : 'Sign up'}
+              {loading ? 'Creating account...' : 'Create account'}
             </Button>
             <p className="text-center text-sm text-muted-foreground">
               Already have an account?{' '}

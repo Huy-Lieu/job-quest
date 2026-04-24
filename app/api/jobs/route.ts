@@ -23,7 +23,11 @@ export async function GET(request: Request) {
     .from('jobs')
     .select(
       'id, canonical_title, company, location, description, salary_min, salary_max, ' +
-      'job_type, employment_type, posted_at, scraped_at, is_phd, status, metadata, ' +
+      'salary_currency, job_type, employment_type, posted_at, scraped_at, is_phd, status, metadata, ' +
+      'role_summary, skills_required, skills_preferred, tech_stack, work_mode, ' +
+      'visa_sponsorship, experience_years_min, experience_years_max, education_level, ' +
+      'security_clearance, benefits_highlights, languages_required, seniority_level, ' +
+      'role_type, enriched_at, ' +
       'job_sources(source_name, source_url)'
     )
     .eq('status', 'active')

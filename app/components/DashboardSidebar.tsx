@@ -12,6 +12,7 @@ import {
   Search,
   GraduationCap,
   User,
+  Settings2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +25,7 @@ const navItems = [
   { href: '/dashboard/applications', label: 'Applications', icon: Briefcase },
   { href: '/dashboard/resume', label: 'Resume', icon: FileText },
   { href: '/dashboard/achievements', label: 'Achievements', icon: Trophy },
+  { href: '/dashboard/settings', label: 'Settings', icon: Settings2 },
   { href: '/dashboard/profile', label: 'Profile', icon: User },
 ]
 

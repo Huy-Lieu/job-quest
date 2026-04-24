@@ -4,7 +4,16 @@ import { supabaseAdmin } from '@/lib/supabase'
 
 export async function POST(request: Request) {
   try {
-    const { username, password, fullName, email } = await request.json()
+    const { username, password, fullName, email, inviteCode } = await request.json()
+
+    // Invite code gate
+    const validCode = process.env.REGISTER_INVITE_CODE
+    if (!validCode || inviteCode !== validCode) {
+      return NextResponse.json(
+        { error: 'Invalid invite code' },
+        { status: 403 }
+      )
+    }
 
     // Basic validation
     if (!username || !password || !fullName) {

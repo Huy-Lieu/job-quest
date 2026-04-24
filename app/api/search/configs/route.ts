@@ -47,6 +47,7 @@ export async function POST(request: Request) {
     sources          = ['linkedin', 'indeed', 'google'],
     career_page_urls = [],
     schedule_interval = 'daily',
+    serp_enabled = false,
   } = body
 
   if (!keywords.length) {
@@ -63,6 +64,7 @@ export async function POST(request: Request) {
       locations,
       sources,
       career_page_urls,
+      serp_enabled,
       schedule_interval,
     })
     .select()
@@ -83,7 +85,7 @@ export async function PATCH(request: Request) {
   // Whitelist editable fields — prevents clients from overriding user_id, id, timestamps, etc.
   const ALLOWED = [
     'name', 'keywords', 'target_companies', 'locations',
-    'sources', 'career_page_urls', 'schedule_interval',
+    'sources', 'career_page_urls', 'serp_enabled', 'schedule_interval',
   ] as const
   const patch: Record<string, unknown> = Object.fromEntries(
     Object.entries(rest).filter(([k]) => (ALLOWED as readonly string[]).includes(k))

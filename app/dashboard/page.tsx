@@ -10,6 +10,17 @@ import { StatCard } from '@/components/dashboard/StatCard'
 import { FitScoreBadge } from '@/components/ui/FitScoreBadge'
 import { Briefcase, Send, CalendarCheck, Trophy, Flame, Star, ArrowRight } from 'lucide-react'
 
+async function getOnboardingStatus(userId: string) {
+  const [{ count: configCount }, { count: resumeCount }] = await Promise.all([
+    supabaseAdmin.from('search_configs').select('*', { count: 'exact', head: true }).eq('user_id', userId).eq('is_active', true),
+    supabaseAdmin.from('resumes').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+  ])
+  return {
+    hasSearchConfig: (configCount ?? 0) > 0,
+    hasResume: (resumeCount ?? 0) > 0,
+  }
+}
+
 interface RecentJob {
   id: string
   canonical_title: string
@@ -43,7 +54,10 @@ async function getUserStats(userId: string) {
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions)
-  const { user, totalApps, interviews, offers, recentJobs } = await getUserStats(session!.user.id)
+  const [{ user, totalApps, interviews, offers, recentJobs }, { hasSearchConfig, hasResume }] = await Promise.all([
+    getUserStats(session!.user.id),
+    getOnboardingStatus(session!.user.id),
+  ])
 
   const xpForNextLevel = (user?.level ?? 1) * 100
   const xpProgress = Math.min(((user?.xp ?? 0) / xpForNextLevel) * 100, 100)
@@ -66,6 +80,72 @@ export default async function DashboardPage() {
         <h2 className="text-2xl font-bold">Welcome back, {user?.name ?? 'there'}!</h2>
         <p className="text-muted-foreground mt-1">Here&apos;s your job search overview.</p>
       </div>
+
+      {(!hasResume || !hasSearchConfig) && (() => {
+        const stepsComplete = [hasResume, hasSearchConfig].filter(Boolean).length
+        const steps = [
+          {
+            label: 'Upload your resume',
+            description: 'Claude uses your resume to score job fit and generate tailored applications',
+            done: hasResume,
+            href: '/dashboard/resume',
+            linkText: 'Upload resume →',
+          },
+          {
+            label: 'Create a search config',
+            description: 'Tell JobQuest what roles and companies to watch for you',
+            done: hasSearchConfig,
+            href: '/dashboard/jobs',
+            linkText: 'Create config →',
+          },
+          {
+            label: 'Run your first search',
+            description: 'JobQuest will scrape job boards and score results against your resume',
+            done: false,
+            href: null,
+            linkText: null,
+          },
+        ]
+
+        return (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center justify-between">
+                <span>Getting Started</span>
+                <span className="text-sm font-normal text-muted-foreground">{stepsComplete} of 3 steps complete</span>
+              </CardTitle>
+              <div className="w-full bg-muted rounded-full h-1.5 mt-1">
+                <div
+                  className="bg-primary h-1.5 rounded-full transition-all"
+                  style={{ width: `${(stepsComplete / 3) * 100}%` }}
+                />
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4 pt-2">
+              {steps.map((step, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <div className={`mt-0.5 h-5 w-5 rounded-full flex items-center justify-center flex-shrink-0 border-2 ${step.done ? 'bg-green-500 border-green-500' : 'border-muted-foreground'}`}>
+                    {step.done && (
+                      <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-medium ${step.done ? 'line-through text-muted-foreground' : ''}`}>{step.label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{step.description}</p>
+                    {!step.done && step.href && (
+                      <Link href={step.href} className="text-xs text-primary hover:underline mt-1 inline-block">
+                        {step.linkText}
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )
+      })()}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map(({ title, value, icon, description }) => (
