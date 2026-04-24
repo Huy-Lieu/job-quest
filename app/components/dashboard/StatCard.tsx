@@ -1,16 +1,27 @@
 'use client'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Send, CalendarCheck, Briefcase, Trophy } from 'lucide-react'
+
+const ICON_MAP = {
+  Send,
+  CalendarCheck,
+  Briefcase,
+  Trophy,
+} as const
+
+export type StatCardIcon = keyof typeof ICON_MAP
 
 interface StatCardProps {
-  title: string
-  value: string | number
-  icon: React.ComponentType<{ className?: string }>
+  title:       string
+  value:       string | number
+  icon:        StatCardIcon
   description: string
-  trend?: 'up' | 'down' | 'neutral'
+  trend?:      'up' | 'down' | 'neutral'
 }
 
-export function StatCard({ title, value, icon: Icon, description, trend }: StatCardProps) {
+export function StatCard({ title, value, icon, description }: StatCardProps) {
+  const Icon = ICON_MAP[icon]
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-2">

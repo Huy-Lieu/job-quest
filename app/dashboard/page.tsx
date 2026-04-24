@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/app/components/dashboard/StatCard'
 import { FitScoreBadge } from '@/app/components/ui/FitScoreBadge'
-import { Briefcase, Send, CalendarCheck, Trophy, Flame, Star, ArrowRight } from 'lucide-react'
+import { Briefcase, Flame, Star, ArrowRight } from 'lucide-react'
 
 async function getOnboardingStatus(userId: string) {
   const [{ count: configCount }, { count: resumeCount }] = await Promise.all([
@@ -63,13 +63,13 @@ export default async function DashboardPage() {
   const xpProgress = Math.min(((user?.xp ?? 0) / xpForNextLevel) * 100, 100)
 
   const stats = [
-    { title: 'Total Applications', value: totalApps,   icon: Send,          description: 'jobs applied to' },
-    { title: 'Interviews',         value: interviews,   icon: CalendarCheck, description: 'scheduled or completed' },
-    { title: 'Offers',             value: offers,       icon: Briefcase,     description: 'received so far' },
+    { title: 'Total Applications', value: totalApps,   icon: 'Send'          as const, description: 'jobs applied to' },
+    { title: 'Interviews',         value: interviews,   icon: 'CalendarCheck' as const, description: 'scheduled or completed' },
+    { title: 'Offers',             value: offers,       icon: 'Briefcase'     as const, description: 'received so far' },
     {
       title: 'Success Rate',
       value: totalApps > 0 ? `${Math.round((offers / totalApps) * 100)}%` : '--',
-      icon: Trophy,
+      icon:  'Trophy' as const,
       description: 'offer / application ratio',
     },
   ]
@@ -246,6 +246,9 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
     </div>
   )
 }
