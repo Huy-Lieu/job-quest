@@ -82,7 +82,7 @@ export function ManualPasteModal({ open, onClose, onJobAdded }: ManualPasteModal
               <Textarea
                 placeholder="Paste the full job description, or just: Title | Company | Location | Salary (optional)"
                 value={pasted}
-                onChange={(e) => setPasted(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPasted(e.target.value)}
                 rows={8}
                 className="font-mono text-sm"
               />

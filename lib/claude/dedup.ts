@@ -54,14 +54,3 @@ export async function isFuzzyDuplicate(
     return false
   }
 }
-, content: userPrompt }],
-    })
-
-    const text =
-      response.content[0]?.type === 'text' ? response.content[0].text : ''
-
-    return text.trim().toUpperCase() === 'YES'
-  } catch {
-    return false
-  }
-}

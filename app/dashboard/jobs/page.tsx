@@ -12,6 +12,7 @@ import {
   XCircle, RefreshCw, Plus, Trash2, Zap, Pencil, Copy, ArrowRight,
 } from 'lucide-react'
 import type { JobWithScore, SearchConfig, SearchRun, SearchSourceName, ScheduleInterval } from '@/lib/types'
+import { SkillPill } from '@/components/ui/SkillPill'
 import { toast } from 'sonner'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -399,7 +400,7 @@ function JobCard({
                   <p className="text-xs font-medium text-green-700 dark:text-green-400 mb-1">Skills matched</p>
                   <div className="flex flex-wrap gap-1">
                     {score.skills_matched.map((s) => (
-                      <span key={s} className="text-xs bg-green-50 text-green-700 border border-green-200 dark:bg-green-500/10 dark:text-green-300 dark:border-green-500/30 rounded-full px-2 py-0.5">{s}</span>
+                      <SkillPill key={s} label={s} variant="matched" />
                     ))}
                   </div>
                 </div>
@@ -409,7 +410,7 @@ function JobCard({
                   <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Skills missing</p>
                   <div className="flex flex-wrap gap-1">
                     {score.skills_missing.map((s) => (
-                      <span key={s} className="text-xs bg-red-50 text-red-600 border border-red-200 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/30 rounded-full px-2 py-0.5">{s}</span>
+                      <SkillPill key={s} label={s} variant="missing" />
                     ))}
                   </div>
                 </div>
@@ -981,7 +982,7 @@ function JobDetailPane({
                 <p className="text-xs font-medium text-green-700 dark:text-green-400 mb-1">Matched</p>
                 <div className="flex flex-wrap gap-1">
                   {score.skills_matched.map((s) => (
-                    <span key={s} className="text-xs bg-green-50 text-green-700 border border-green-200 dark:bg-green-500/10 dark:text-green-300 dark:border-green-500/30 rounded-full px-2 py-0.5">{s}</span>
+                    <SkillPill key={s} label={s} variant="matched" />
                   ))}
                 </div>
               </div>
@@ -991,7 +992,7 @@ function JobDetailPane({
                 <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Gaps</p>
                 <div className="flex flex-wrap gap-1">
                   {score.skills_missing.map((s) => (
-                    <span key={s} className="text-xs bg-red-50 text-red-600 border border-red-200 dark:bg-red-500/10 dark:text-red-300 dark:border-red-500/30 rounded-full px-2 py-0.5">{s}</span>
+                    <SkillPill key={s} label={s} variant="missing" />
                   ))}
                 </div>
               </div>
