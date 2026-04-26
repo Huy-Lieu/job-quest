@@ -63,8 +63,9 @@ export async function areFuzzyDuplicates(pairs: DedupPair[]): Promise<boolean[]>
     })
 
     const rawText = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]'
-    // Strip markdown code fences Claude sometimes wraps around JSON output
-    const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+    // Extract the first JSON array from the response, ignoring surrounding text or markdown fences
+    const match = rawText.match(/\[[\s\S]*?\]/)
+    const raw = match ? match[0] : '[]'
     const parsed = JSON.parse(raw)
 
     if (!Array.isArray(parsed) || parsed.length !== pairs.length) {

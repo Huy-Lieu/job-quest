@@ -316,9 +316,9 @@ async function runPipeline(
       insertedCount        = insertedJobs.length
       const hashToJobId    = new Map(insertedJobs.map(j => [j.raw_hash, j.id]))
 
-      // job_sources — split on whether source_job_id is present.
-      // NULL values can't participate in the unique conflict target, so rows
-      // without a source_job_id are inserted separately with ignoreDuplicates.
+      // job_sources — plain insert with ignoreDuplicates lets the DB's partial
+      // unique index (source_name, source_job_id WHERE source_job_id IS NOT NULL)
+      // handle dedup via ON CONFLICT DO NOTHING. No need to split on null.
       const allSources = enrichedNewJobs
         .map(nj => {
           const jobId = hashToJobId.get(nj.raw_hash)
@@ -330,28 +330,15 @@ async function runPipeline(
             source_job_id: nj.source.source_job_id ?? null,
           }
         })
-        .filter(Boolean) as { job_id: string; source_name: string; source_url: string; source_job_id: string | null }[]
+        .filter(Boolean)
 
-      const withId    = allSources.filter(s => s.source_job_id !== null)
-      const withoutId = allSources.filter(s => s.source_job_id === null)
-
-      if (withId.length > 0) {
+      if (allSources.length > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { error: sourcesError } = await (supabaseAdmin as any)
           .from('job_sources')
-          .upsert(withId, { onConflict: 'source_name,source_job_id', ignoreDuplicates: true })
+          .insert(allSources, { ignoreDuplicates: true })
         if (sourcesError) {
-          console.error('[search/stream] job_sources upsert failed:', JSON.stringify(sourcesError))
-        }
-      }
-
-      if (withoutId.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: sourcesError } = await (supabaseAdmin as any)
-          .from('job_sources')
-          .insert(withoutId)
-        if (sourcesError) {
-          console.error('[search/stream] job_sources insert (no id) failed:', JSON.stringify(sourcesError))
+          console.error('[search/stream] job_sources insert failed:', JSON.stringify(sourcesError))
         }
       }
 

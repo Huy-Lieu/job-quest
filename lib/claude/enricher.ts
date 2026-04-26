@@ -107,8 +107,9 @@ async function enrichBatch(batch: NormalizedJob[]): Promise<EnrichedFields[]> {
   })
 
   const rawText = response.content[0].type === 'text' ? response.content[0].text : ''
-  // Strip markdown code fences that Claude sometimes wraps around JSON output
-  const raw = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+  // Extract first JSON array from response, ignoring markdown fences or surrounding text
+  const jsonMatch = rawText.match(/\[[\s\S]*\]/)
+  const raw = jsonMatch ? jsonMatch[0] : '[]'
 
   try {
     const parsed = JSON.parse(raw) as Array<{ index: number } & EnrichedFields>

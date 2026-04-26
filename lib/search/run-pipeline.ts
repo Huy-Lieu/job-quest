@@ -179,31 +179,21 @@ export async function runPipelineForConfig(config: SearchConfig): Promise<number
       insertedCount      = insertedJobs.length
       const hashToJobId  = new Map(insertedJobs.map(j => [j.raw_hash, j.id]))
 
-      // job_sources — split on source_job_id presence (NULL breaks unique conflict target)
+      // job_sources — plain insert with ignoreDuplicates, partial unique index handles dedup
       const allSources = enrichedNewJobs
         .map(nj => {
           const jobId = hashToJobId.get(nj.raw_hash)
           if (!jobId) return null
           return { job_id: jobId, source_name: nj.source.name, source_url: nj.source.url, source_job_id: nj.source.source_job_id ?? null }
         })
-        .filter(Boolean) as { job_id: string; source_name: string; source_url: string; source_job_id: string | null }[]
+        .filter(Boolean)
 
-      const withId    = allSources.filter(s => s.source_job_id !== null)
-      const withoutId = allSources.filter(s => s.source_job_id === null)
-
-      if (withId.length > 0) {
+      if (allSources.length > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { error: srcErr } = await (supabaseAdmin as any)
           .from('job_sources')
-          .upsert(withId, { onConflict: 'source_name,source_job_id', ignoreDuplicates: true })
-        if (srcErr) console.error('[cron] job_sources upsert failed:', JSON.stringify(srcErr))
-      }
-      if (withoutId.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: srcErr } = await (supabaseAdmin as any)
-          .from('job_sources')
-          .insert(withoutId)
-        if (srcErr) console.error('[cron] job_sources insert (no id) failed:', JSON.stringify(srcErr))
+          .insert(allSources, { ignoreDuplicates: true })
+        if (srcErr) console.error('[cron] job_sources insert failed:', JSON.stringify(srcErr))
       }
 
       // job_scores
