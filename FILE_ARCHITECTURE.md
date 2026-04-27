@@ -13,14 +13,24 @@ preventing silent truncation bugs when AI tools read or write them.
 
 | File | Lines | Responsibility |
 |------|-------|----------------|
-| `app/api/search/stream/route.ts` | 120 | HTTP layer only: abort registry, `makeStream()`, GET/POST/DELETE exports |
-| `lib/pipeline/run.ts` | 224 | Pipeline stages 1–4: scrape → normalize → enrich → dedup |
-| `lib/pipeline/store.ts` | 182 | Pipeline stages 5–6: score → store; emits `complete` SSE event |
+| `app/api/search/stream/route.ts` | ~180 | SSE wrapper only: auth, search_runs lifecycle, SSE emission, cancellation |
+| `lib/pipeline/core.ts` | ~360 | Full shared pipeline (all 8 stages); used by SSE route + cron runner |
+| `lib/search/run-pipeline.ts` | ~65 | Cron wrapper: calls `runPipelineCore`, owns search_runs DB lifecycle |
 
 **Key exports:**
-- `run.ts` → `runPipeline(userId, configId, isCancelled, emit, close)`
-- `store.ts` → `storeAndFinish(args: StoreAndFinishArgs)`
+- `core.ts` → `runPipelineCore(config, userId, onProgress?): Promise<PipelineResult>`
 - `route.ts` → `GET`, `POST`, `DELETE` (Next.js Route Handlers)
+
+**Pipeline stage order (in `core.ts`):**
+1. Scrape — Apify + SerpAPI in parallel
+2. Normalize — raw JSON → canonical schema with `country_code`
+3. Early dedup — source job ID + SHA-256 hash (free, DB only)
+4. Location filter — ISO country code exact match (free)
+5a. Workday description fetch — Apify RAG browser, sequential, max 5/run
+5b. Haiku enrich — 10 jobs/call (paid, survivors only)
+6. Fuzzy dedup — Haiku YES/NO (paid, needs enriched data)
+7. Sonnet score — 5 jobs/call (paid, final unique jobs only)
+8. Store — jobs + job_sources + job_scores → Supabase
 
 ---
 
@@ -71,7 +81,7 @@ import { JobListRow, JobDetailPane, JobDetailEmptyState } from '@/app/components
 ## Rules going forward
 
 - **Hard limit: 300 lines per file.** If a file approaches this, split before editing.
-- **Use bash `cat > file << 'EOF'`** for writing files with special characters (arrows `→`, em-dashes, etc.) — the Write tool can silently truncate at ~15KB.
+- **Never use bash heredoc (`cat >> file << 'EOF'`)** — causes null byte corruption. Use the Write tool for short files or Python `f.write()` for files containing template literals (backtick + `${`).
 - **Always verify after writing:** `wc -l file && tail -5 file`
 - **Run `npx tsc --noEmit`** after any structural change to catch import errors early.
 - **Import path convention:** Files under `app/` must use `@/app/...`; shadcn/ui components use `@/components/ui/...`.

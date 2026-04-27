@@ -18,6 +18,7 @@ import { orchestrateApify }     from '@/lib/apify/orchestrate'
 import { searchGoogleJobs }     from '@/lib/serp/search'
 import { normalizeJob }         from '@/lib/pipeline/normalize'
 import { normalizeSerpJob }     from '@/lib/serp/normalize'
+import { enrichWorkdayDescriptions } from '@/lib/apify/descriptions'
 import { enrichJobsBatch }      from '@/lib/claude/enricher'
 import { deduplicateEarly, deduplicateFuzzy } from '@/lib/pipeline/deduplicate'
 import { scoreJobsBatch, type EnrichedJob }   from '@/lib/claude/scorer'
@@ -205,17 +206,25 @@ export async function runPipelineCore(
 
   await notify('deduplicating', { survivors: afterLocationFilter.length })
 
-  // ── Stage 5: Enrich — Claude Haiku (paid — only surviving jobs) ────────────
+  // ── Stage 5a: Fetch full descriptions — Workday survivors only ───────────
+  // Workday's listing API returns bullet fragments. For jobs that passed the
+  // location filter, we fire Apify rag-web-browser against the apply URL to
+  // get the full rendered JD text before Haiku enrichment.
+  await notify('fetching_descriptions', { message: 'Fetching full job descriptions...' })
+
+  const afterDescriptions = await enrichWorkdayDescriptions(afterLocationFilter)
+
+  // ── Stage 5b: Enrich — Claude Haiku (paid — only surviving jobs) ──────────
   await notify('enriching', { message: 'Enriching with Claude Haiku...' })
 
-  const enrichedFields = afterLocationFilter.length > 0
-    ? await enrichJobsBatch(afterLocationFilter)
+  const enrichedFields = afterDescriptions.length > 0
+    ? await enrichJobsBatch(afterDescriptions)
     : []
 
   await notify('enriching', { enriched: enrichedFields.length })
 
   // ── Stage 6: Fuzzy dedup — Claude Haiku (paid — needs enriched data) ───────
-  const enrichedForFuzzy = afterLocationFilter.map((job, i) => ({
+  const enrichedForFuzzy = afterDescriptions.map((job, i) => ({
     ...job,
     enriched: enrichedFields[i],
   })) as EnrichedJob[]
@@ -326,6 +335,7 @@ export async function runPipelineCore(
           }
         })
         .filter(Boolean)
+
 
       if (scoresToInsert.length > 0) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

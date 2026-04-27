@@ -308,6 +308,33 @@ function normalizeWorkMode(raw: string): string {
 
 function parsePostedDate(raw: string): string | null {
   if (!raw) return null
+
+  const lower = raw.toLowerCase().trim()
+  const now   = Date.now()
+
+  // Workday-style relative strings: "Posted Today", "Posted Yesterday",
+  // "Posted 3 Days Ago", "Posted 2+ Weeks Ago", "Posted 1 Month Ago"
+  if (/posted today|posted just now/.test(lower)) {
+    return new Date(now).toISOString()
+  }
+  if (/posted yesterday/.test(lower)) {
+    return new Date(now - 86_400_000).toISOString()
+  }
+
+  const wdDays = lower.match(/posted\s+(\d+)\+?\s+day/)
+  if (wdDays) return new Date(now - parseInt(wdDays[1], 10) * 86_400_000).toISOString()
+
+  const wdWeeks = lower.match(/posted\s+(\d+)\+?\s+week/)
+  if (wdWeeks) return new Date(now - parseInt(wdWeeks[1], 10) * 7 * 86_400_000).toISOString()
+
+  const wdMonths = lower.match(/posted\s+(\d+)\+?\s+month/)
+  if (wdMonths) {
+    const d = new Date(now)
+    d.setMonth(d.getMonth() - parseInt(wdMonths[1], 10))
+    return d.toISOString()
+  }
+
+  // Standard ISO / parseable date string fallback
   try {
     const d = new Date(raw)
     return isNaN(d.getTime()) ? null : d.toISOString()

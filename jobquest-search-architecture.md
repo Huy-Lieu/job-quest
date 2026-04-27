@@ -6,12 +6,13 @@
 
 ## 1. System Overview
 
-JobQuest's job search engine uses a **dual-source acquisition layer** feeding a **5-stage intelligence pipeline**:
+JobQuest's job search engine uses a **dual-source acquisition layer** feeding a **cost-optimised 8-stage pipeline** (free stages first, paid Claude stages only on survivors):
 
 - **Apify** — deep scraper. Handles LinkedIn, Indeed, Greenhouse, Lever, Ashby, Workday, and company career pages. Bypasses anti-bot, parses ATS pages.
 - **SerpAPI** — broad net. Google Jobs aggregation via `google_jobs` engine. Catches listings Apify sources miss. Complementary, not competing.
-- **Claude Haiku** — enrichment pass. Reads raw job text and extracts every structured field. Runs after normalization, before deduplication.
-- **Claude Haiku** — deduplication. Cheap YES/NO fuzzy match on ambiguous pairs. Used only as Stage 3 last resort.
+- **Apify RAG browser** — post-filter description fetch. For Workday survivors only (max 5/run, sequential). Renders the React SPA to extract full JD text that the CXS listing API doesn't return.
+- **Claude Haiku** — enrichment pass. Reads full JD text and extracts every structured field. Runs after location filter + description fetch, before fuzzy dedup.
+- **Claude Haiku** — fuzzy deduplication. Cheap YES/NO match on ambiguous pairs. Stage 3 last resort only.
 - **Claude Sonnet** — scoring. Batched fit analysis (5 jobs/call) against the user's active resume.
 
 The pipeline runs in two modes:
@@ -32,7 +33,7 @@ Search timeout: **5 minutes** (`maxDuration = 300` on the SSE route). During sea
 | Indeed | `misceres/indeed-scraper` | Keywords + location | Near real-time |
 | Company career pages | `apify/website-content-crawler` | Watchlist URLs | Daily |
 | Greenhouse/Lever/Ashby ATS | `apify/rag-web-browser` (targeted) | ATS-hosted job pages | Daily |
-| Workday portals | `apify/rag-web-browser` (targeted) | Workday-hosted career pages | Daily |
+| Workday portals | Custom CXS listing API fetch | Workday-hosted career pages (bullet fragments only at scrape time) | Daily |
 | PhD/academic boards | `apify/rag-web-browser` | NSF, academicjobsonline.org | Daily |
 
 ### 2.2 SerpAPI Source
@@ -76,29 +77,54 @@ PhD boards: NSF REU, academicjobsonline.org, scholarshipdb.net
 ┌─────────────────────────────────────────────────────────────────┐
 │                         TRIGGER LAYER                           │
 │   Vercel Cron (07:00 UTC daily)  |  /api/search/stream (SSE)    │
+│   Both call runPipelineCore() in lib/pipeline/core.ts           │
 └────────────────────────┬────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                       ORCHESTRATOR                              │
-│  Reads user SearchConfig · Creates search_runs row              │
-│  Emits SSE: { stage: "scraping", progress: 0 }                  │
-└──────┬──────┬──────┬──────┬──────┬──────┬───────────────────────┘
-       ↓      ↓      ↓      ↓      ↓      ↓
-  SerpAPI  LinkedIn  Indeed  Career  ATS   PhD
-  Google             Pages   Pages  Boards
-  Jobs    [ALL FIRED IN PARALLEL — Promise.allSettled]
-       ↓      ↓      ↓      ↓      ↓      ↓
+│                    STAGE 1: SCRAPE                               │
+│  Apify (LinkedIn, Indeed, ATS, Workday, Career pages, PhD)      │
+│  SerpAPI Google Jobs — all fired in parallel                    │
+│  Workday: CXS listing API returns bullet fragments only         │
+│  Emits SSE: { stage: "scraping" }                               │
+└─────────────────────────────────────────────────────────────────┘
+                         ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                    NORMALIZATION LAYER                          │
-│  Raw JSON → canonical Job schema (basic fields only)            │
-│  Extract: title · company · location · salary · URL · date      │
+│                    STAGE 2: NORMALIZE                            │
+│  Raw JSON → canonical NormalizedJob schema                      │
+│  Infers country_code (ISO 3166-1 alpha-2) from location string  │
+│  "Santa Clara, CA" → US · "Remote" → REMOTE · "Tel Aviv" → IL  │
 │  Emits SSE: { stage: "normalizing", found: N }                  │
 └─────────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                  HAIKU ENRICHMENT LAYER  ← NEW                  │
+│               STAGE 3: EARLY DEDUP  (free)                      │
+│  Stage 1: Source job ID match (exact — fastest, DB lookup)      │
+│  Stage 2: SHA-256 hash (company + title + location)             │
+│  Emits SSE: { stage: "deduplicating" }                          │
+└─────────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────────┐
+│               STAGE 4: LOCATION FILTER  (free)                  │
+│  Matches job.country_code against user's target locations       │
+│  REMOTE and MULTI always pass · UNKNOWN always excluded         │
+│  "United States" → matches all US city/state jobs               │
+│  Emits SSE: { stage: "deduplicating", survivors: N }            │
+└─────────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────────┐
+│          STAGE 5a: WORKDAY DESCRIPTION FETCH  (paid)            │
+│  For Workday survivors only · Sequential (one at a time)        │
+│  Max 5 fetches/run · Apify rag-web-browser · 60s timeout        │
+│  Renders React SPA → extracts full markdown JD text             │
+│  Falls back to bullet fragments if fetch fails                  │
+│  lib/apify/descriptions.ts → enrichWorkdayDescriptions()        │
+│  Emits SSE: { stage: "fetching_descriptions" }                  │
+└─────────────────────────────────────────────────────────────────┘
+                         ↓
+┌─────────────────────────────────────────────────────────────────┐
+│             STAGE 5b: HAIKU ENRICHMENT  (paid)                  │
 │  Model: claude-haiku-4-5 · Batched: 10 jobs/call                │
-│  Input:  raw description text                                   │
+│  Input:  full JD text (or bullet fragments as fallback)         │
 │  Output: role_summary · skills_required · skills_preferred      │
 │          tech_stack · work_mode · visa_sponsorship · apply_url  │
 │          experience_years · education_level · benefits          │
@@ -107,28 +133,25 @@ PhD boards: NSF REU, academicjobsonline.org, scholarshipdb.net
 └─────────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                   DEDUPLICATION LAYER                           │
-│  Stage 1: Source job ID match (exact — fastest)                 │
-│  Stage 2: SHA-256 hash (company + title + location)             │
-│  Stage 3: Claude Haiku YES/NO (ambiguous same-company pairs)    │
-│  → Merge into canonical job · track all source URLs             │
-│  → Increment sources_count on merge                             │
+│               STAGE 6: FUZZY DEDUP  (paid)                      │
+│  Claude Haiku YES/NO on ambiguous same-company pairs            │
+│  Needs enriched data — runs after Stage 5b                      │
 │  Emits SSE: { stage: "deduplicating", unique: N }               │
 └─────────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                    CLAUDE SCORING LAYER                         │
+│               STAGE 7: CLAUDE SCORING  (paid)                   │
 │  Model: claude-sonnet-4-6 · Batched: 5 jobs/call               │
-│  Input:  enriched job + user's active resume text               │
-│  Output: fit_score (0–100) · skills_matched · skills_missing    │
-│          fit_reason (2–3 sentences) · recommended (bool)        │
+│  Input:  enriched job + user's active resume                    │
+│  Output: fit_score (0-100) · skills_matched · skills_missing    │
+│          fit_reason (2-3 sentences) · recommended (bool)        │
 │  Emits SSE: { stage: "scoring", scored: N }                     │
 └─────────────────────────────────────────────────────────────────┘
                          ↓
 ┌─────────────────────────────────────────────────────────────────┐
-│                     SUPABASE STORAGE                            │
+│                    STAGE 8: STORE                                │
 │  jobs · job_sources · job_scores · search_runs                  │
-│  company_intel (cached) · analysis_sessions                     │
+│  country_code excluded from DB insert (pipeline-internal only)  │
 │  Emits SSE: { stage: "complete", newJobs: N, scored: N }        │
 └─────────────────────────────────────────────────────────────────┘
                          ↓
@@ -543,15 +566,18 @@ Both run in parallel. After normalization, deduplication merges any overlapping 
 // lib/pipeline/normalize.ts
 
 export function normalizeJob(raw: RawJob, sourceName: string): NormalizedJob {
+  const location = raw.location || raw.jobLocation || 'Unknown'
   return {
     canonical_title:  cleanTitle(raw.title || raw.jobTitle || ''),
     company:          cleanCompany(raw.company || raw.companyName || ''),
-    location:         raw.location || raw.jobLocation || 'Unknown',
+    location,
+    country_code:     inferCountryCode(location), // ISO 3166-1 alpha-2 or REMOTE/MULTI/UNKNOWN
     description:      raw.description || raw.markdown || '',
     salary_min:       parseSalaryMin(raw.salary || raw.salaryRange || ''),
     salary_max:       parseSalaryMax(raw.salary || raw.salaryRange || ''),
     job_type:         normalizeJobType(raw.employmentType || ''),
     posted_at:        parsePostedDate(raw.postedAt || raw.datePosted || ''),
+    // parsePostedDate handles: ISO strings, Workday "Posted Today" / "Posted 3 Days Ago"
     is_phd:           detectPhD(raw.title, raw.description),
     source: {
       name:           sourceName,
@@ -560,7 +586,8 @@ export function normalizeJob(raw: RawJob, sourceName: string): NormalizedJob {
     }
   };
   // Note: enrichment fields (role_summary, skills_required, etc.) are populated
-  // by the Haiku enrichment pass AFTER normalization.
+  // by the Haiku enrichment pass AFTER location filter + description fetch.
+  // country_code is pipeline-internal — excluded from the Supabase jobs upsert.
 }
 
 function cleanTitle(title: string): string {
@@ -919,4 +946,4 @@ components/
 
 ---
 
-*Document version 2.0 — Reflects full redesign with SerpAPI, Haiku enrichment, Company Intel, SSE streaming, manual paste, and split-pane UI.*
+*Document version 2.1 — Updated pipeline stage order: early dedup + location filter (free) before Haiku enrichment (paid). Added: country_code inference, Workday post-filter description fetch via Apify RAG (sequential, max 5/run), shared pipeline core (lib/pipeline/core.ts), Workday postedOn date parsing.*

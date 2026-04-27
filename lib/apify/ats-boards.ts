@@ -223,51 +223,6 @@ function normalizeWorkdayLocation(raw: string | undefined): string {
   return trimmed
 }
 
-/**
- * Fetch the full job description for a single Workday job.
- * The CXS listing API returns only bullet fragments — this detail call
- * retrieves the complete JD text needed for enrichment and scoring.
- * Returns empty string on any failure so the caller can fall back to bulletFields.
- */
-async function fetchWorkdayJobDetail(
-  base: string,
-  tenant: string,
-  site: string,
-  externalPath: string
-): Promise<string> {
-  try {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 5000)
-    const res = await fetch(
-      `${base}/wday/cxs/${tenant}/${site}/jobs${externalPath}`,
-      {
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      }
-    )
-    clearTimeout(timer)
-    if (!res.ok) {
-      console.log(`[workday-detail] ${externalPath} -> HTTP ${res.status}`)
-      return ''
-    }
-    const body = await res.json()
-    // DEBUG: log top-level keys and jobPostingInfo keys to understand response shape
-    console.log(`[workday-detail] top-level keys:`, Object.keys(body))
-    const info = body.jobPostingInfo ?? {}
-    console.log(`[workday-detail] jobPostingInfo keys:`, Object.keys(info))
-    console.log(`[workday-detail] jobDescription (first 200):`, String(info.jobDescription ?? '').slice(0, 200))
-    // Combine all description fields; strip HTML tags; collapse whitespace
-    const raw = [
-      info.jobDescription ?? '',
-      info.jobDescriptionSummary ?? '',
-      info.additionalJobDescription ?? '',
-    ].join('\n')
-    return raw.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim()
-  } catch {
-    return ''
-  }
-}
-
 export async function fetchWorkdayBoard(
   t: WorkdayTenant,
   query: string,
@@ -288,20 +243,7 @@ export async function fetchWorkdayBoard(
     const postings = (body.jobPostings ?? []) as WorkdayJob[]
     if (postings.length === 0) return []
 
-    // Fetch full descriptions in parallel — one detail call per job.
-    // Falls back to bulletFields if any individual call fails or times out.
-    const detailResults = await Promise.allSettled(
-      postings.map(j =>
-        j.externalPath
-          ? fetchWorkdayJobDetail(base, t.tenant, t.site, j.externalPath)
-          : Promise.resolve('')
-      )
-    )
-
-    const successCount = detailResults.filter(r => r.status === 'fulfilled' && r.value.length > 0).length
-    console.log(`[workday] ${t.tenant} fetched full descriptions for ${successCount}/${postings.length} jobs`)
-
-    return postings.map((j, i) => {
+    return postings.map(j => {
       // Build public apply URL: bare externalPath needs locale + site prefix
       let url = ''
       if (j.externalPath) {
@@ -314,19 +256,13 @@ export async function fetchWorkdayBoard(
         }
       }
 
-      // Use full description from detail call; fall back to bullet fragments
-      const detailResult = detailResults[i]
-      const fullDescription =
-        detailResult.status === 'fulfilled' && detailResult.value.length > 0
-          ? detailResult.value
-          : (j.bulletFields ?? []).join('\n')
-
       return {
         title:         j.title ?? '',
         company:       t.tenant,
         location:      normalizeWorkdayLocation(j.locationsText),
         url,
-        description:   fullDescription,
+        // Bullet fragments only — full description fetched post-filter via Apify RAG
+        description:   (j.bulletFields ?? []).join('\n'),
         postedAt:      j.postedOn ?? null,
         source_job_id: j.externalPath ?? null,
       }

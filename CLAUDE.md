@@ -20,7 +20,7 @@ JobQuest is an AI-powered job application tracker built with Next.js App Router,
 
 **Core flows:**
 
-1. **Job Search Pipeline** (`/api/search/stream`, `/api/search/run`): Fires Apify scrapers + SerpAPI in parallel → normalizes raw output → **Haiku enrichment pass** (extracts structured fields from raw JD text, 10 jobs/call) → 3-stage deduplication (source job ID → content hash → Claude Haiku fuzzy match) → batch-scores jobs against the user's active resume using Claude Sonnet (5 jobs/call). Results stored in `jobs`, `job_sources`, `job_scores`. Progress streamed via SSE (`maxDuration = 300`).
+1. **Job Search Pipeline** (`/api/search/stream`, `/api/search/run`): Fires Apify scrapers + SerpAPI in parallel → normalizes raw output → early dedup (source ID + hash, free) → location filter (ISO country code matching, free) → **Workday description fetch** (Apify RAG browser, survivors only, sequential) → **Haiku enrichment pass** (extracts structured fields from full JD text, 10 jobs/call) → fuzzy dedup (Claude Haiku YES/NO) → batch-scores jobs against the user's active resume using Claude Sonnet (5 jobs/call). Results stored in `jobs`, `job_sources`, `job_scores`. Progress streamed via SSE (`maxDuration = 300`). Shared pipeline logic lives in `lib/pipeline/core.ts` — used by both the SSE route and the cron runner.
 
 2. **Shared Context** (`lib/context.ts` → `buildJobContext()`): Reads enriched job data, fit scores, and company intel from DB before calling Claude. Only fetches what's missing. Used by both the job detail panel and the Resume page to avoid redundant recomputation.
 
@@ -39,10 +39,10 @@ JobQuest is an AI-powered job application tracker built with Next.js App Router,
 - [app/api/jobs/manual/](app/api/jobs/manual/) — Manually pasted job ingestion endpoint
 - [app/api/company-intel/](app/api/company-intel/) — Company intelligence fetch + cache endpoint
 - [app/dashboard/](app/dashboard/) — Protected UI pages; guarded by `middleware.ts` which redirects unauthenticated requests to `/login`
-- [lib/apify/](lib/apify/) — Apify source wrappers (`sources.ts`), actor runner with polling (`search.ts`), parallel orchestration (`orchestrate.ts`)
+- [lib/apify/](lib/apify/) — Apify source wrappers (`sources.ts`), actor runner with polling (`search.ts`), parallel orchestration (`orchestrate.ts`), post-filter Workday description fetch (`descriptions.ts`)
 - [lib/serp/](lib/serp/) — SerpAPI Google Jobs integration (`search.ts`, `normalize.ts`)
 - [lib/claude/](lib/claude/) — Haiku enricher (`enricher.ts`: 10 jobs/call), Sonnet scorer (`scorer.ts`: 5 jobs/call), Haiku dedup helper (`dedup.ts`: YES/NO only)
-- [lib/pipeline/](lib/pipeline/) — Raw-to-canonical normalization (`normalize.ts`) and 3-stage dedup logic (`deduplicate.ts`)
+- [lib/pipeline/](lib/pipeline/) — Shared pipeline orchestrator (`core.ts`), raw-to-canonical normalization with `country_code` inference (`normalize.ts`), 3-stage dedup split into `deduplicateEarly()` + `deduplicateFuzzy()` (`deduplicate.ts`)
 - [lib/context.ts](lib/context.ts) — `buildJobContext()`: shared data assembler for job detail panel + resume page
 - [lib/xp.ts](lib/xp.ts) — XP award, level calculation, streak tracking, achievement unlocks
 - [lib/types.ts](lib/types.ts) — All shared TypeScript interfaces
@@ -74,7 +74,7 @@ See [.env.example](.env.example). Required:
 
 ## Claude Usage Patterns
 
-- **Job enrichment** (`lib/claude/enricher.ts`): Claude Haiku (`claude-haiku-4-5-20251001`), batches **10 jobs per call**. Extracts: `role_summary`, `skills_required`, `skills_preferred`, `tech_stack`, `work_mode`, `visa_sponsorship`, `apply_url`, `experience_years_min/max`, `education_level`, `security_clearance`, `benefits_highlights`, `languages_required`. Runs after normalization, before deduplication.
+- **Job enrichment** (`lib/claude/enricher.ts`): Claude Haiku (`claude-haiku-4-5-20251001`), batches **10 jobs per call**. Extracts: `role_summary`, `skills_required`, `skills_preferred`, `tech_stack`, `work_mode`, `visa_sponsorship`, `apply_url`, `experience_years_min/max`, `education_level`, `security_clearance`, `benefits_highlights`, `languages_required`. Runs after location filter + Workday description fetch, before fuzzy dedup.
 - **Deduplication** (`lib/claude/dedup.ts`): Claude Haiku, Stage 3 only (after source ID and hash checks both fail). Responds YES/NO only.
 - **Job scoring** (`lib/claude/scorer.ts`): Claude Sonnet 4.6 (`claude-sonnet-4-6`), batches **5 jobs per call**. Uses enriched `skills_required` + `role_summary` (not raw description). Returns `fit_score` (0–100), `fit_reason`, `skills_matched`, `skills_missing`.
 - **Resume analysis** (`/api/resume/analyze`): Claude Sonnet 4.6. Always reads `analysis_sessions` first — only calls Claude for sections not yet stored.
@@ -84,15 +84,22 @@ When adding Claude calls: use prompt caching where the system prompt or large co
 
 ## Pipeline Stage Order
 
+Cost-optimised: free stages run first so Claude only processes jobs that are new and in the right location.
+
 ```
 Scrape (Apify + SerpAPI in parallel)
-  → Normalize (raw JSON → canonical schema, basic fields only)
-  → Haiku Enrich (10 jobs/call — extract all structured fields from description)
-  → Deduplicate (source ID → SHA-256 hash → Haiku fuzzy — fast first)
+  → Normalize (raw JSON → canonical schema + country_code inference)
+  → Early Dedup — free (Stage 1: source job ID, Stage 2: SHA-256 hash)
+  → Location Filter — free (ISO country_code exact match; REMOTE/MULTI always pass)
+  → Workday Description Fetch — Apify RAG browser, sequential, max 5/run (survivors only)
+  → Haiku Enrich (10 jobs/call — extract all structured fields from full JD text)
+  → Fuzzy Dedup — Haiku YES/NO (Stage 3, paid, only after enrichment)
   → Sonnet Score (5 jobs/call — fit score vs active resume)
   → Store (Supabase: jobs + job_sources + job_scores)
   → Emit SSE complete event / update search_runs.progress
 ```
+
+Shared pipeline logic: `lib/pipeline/core.ts` (`runPipelineCore`). The SSE route (`app/api/search/stream/route.ts`) and cron runner (`lib/search/run-pipeline.ts`) are thin wrappers that pass a `ProgressCallback` and own their own lifecycle (SSE events / DB writes).
 
 ## UI Architecture
 
