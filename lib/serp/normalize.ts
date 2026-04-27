@@ -3,6 +3,7 @@
 
 import type { SerpJobResult } from '@/lib/types'
 import type { NormalizedJob } from '@/lib/pipeline/normalize'
+import { inferCountryCode }   from '@/lib/pipeline/normalize'
 
 const HOURS_PER_YEAR = 2080 // 40 hrs/week × 52 weeks
 
@@ -154,10 +155,13 @@ export function normalizeSerpJob(raw: SerpJobResult): NormalizedJob {
 
   const salaryStr = ext.salary ?? ''
 
+  const location = raw.location ?? ''
+
   return {
     canonical_title: raw.title.trim(),
     company:         raw.company_name.trim(),
-    location:        raw.location ?? '',
+    location,
+    country_code:    inferCountryCode(location),
     description:     raw.description ?? '',
     salary_min:      parseSalaryMin(salaryStr),
     salary_max:      parseSalaryMax(salaryStr),

@@ -7,6 +7,7 @@ export interface NormalizedJob {
   canonical_title:  string
   company:          string
   location:         string
+  country_code:     string   // ISO 3166-1 alpha-2 e.g. "US", "IL", "DE" — or "REMOTE" / "UNKNOWN"
   description:      string
   salary_min:       number | null
   salary_max:       number | null
@@ -56,10 +57,13 @@ export function normalizeJob(raw: RawApifyJob, sourceName: string): NormalizedJo
     }
   }
 
+  const location = firstStr(raw.location, raw.jobLocation, raw.city) || 'Unknown'
+
   return {
     canonical_title: title,
     company,
-    location:        firstStr(raw.location, raw.jobLocation, raw.city) || 'Unknown',
+    location,
+    country_code:    inferCountryCode(location),
     description,
     salary_min,
     salary_max,
@@ -89,6 +93,106 @@ export function normalizeAll(raws: RawApifyJob[], sourceName: string): Normalize
   return raws
     .map(raw => normalizeJob(raw, sourceName))
     .filter(j => j.canonical_title || j.company)
+}
+
+// ── country code inference ────────────────────────────────────────────────────
+
+/**
+ * All 50 US state codes + DC + common territories.
+ * Used to infer country_code = "US" from location strings that don't
+ * include "United States" explicitly (e.g. "Santa Ana, CA", "Austin, TX").
+ */
+const US_STATE_CODES = new Set([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY',
+  'DC','PR','GU','VI',
+])
+
+/**
+ * Maps common country name variants → ISO 3166-1 alpha-2 codes.
+ * Covers the countries most likely to appear in job location strings.
+ */
+const COUNTRY_NAME_TO_CODE: Record<string, string> = {
+  'united states': 'US', 'usa': 'US', 'u.s.': 'US', 'u.s.a.': 'US',
+  'united kingdom': 'GB', 'uk': 'GB', 'england': 'GB', 'scotland': 'GB', 'wales': 'GB',
+  'canada': 'CA',
+  'australia': 'AU',
+  'germany': 'DE', 'deutschland': 'DE',
+  'france': 'FR',
+  'netherlands': 'NL', 'holland': 'NL',
+  'sweden': 'SE',
+  'norway': 'NO',
+  'denmark': 'DK',
+  'finland': 'FI',
+  'switzerland': 'CH',
+  'austria': 'AT',
+  'belgium': 'BE',
+  'spain': 'ES',
+  'portugal': 'PT',
+  'italy': 'IT',
+  'poland': 'PL',
+  'czech republic': 'CZ', 'czechia': 'CZ',
+  'israel': 'IL',
+  'india': 'IN',
+  'japan': 'JP',
+  'south korea': 'KR', 'korea': 'KR',
+  'china': 'CN',
+  'singapore': 'SG',
+  'hong kong': 'HK',
+  'taiwan': 'TW',
+  'brazil': 'BR',
+  'mexico': 'MX',
+  'vietnam': 'VN', 'viet nam': 'VN',
+  'united arab emirates': 'AE', 'uae': 'AE',
+  'south africa': 'ZA',
+}
+
+/**
+ * Infer an ISO 3166-1 alpha-2 country code from a free-text location string.
+ *
+ * Resolution order:
+ *   1. "Remote" variants                → "REMOTE"
+ *   2. "Multiple Locations"             → "MULTI"
+ *   3. Explicit ISO-2 code in string    → that code
+ *   4. Known country name substring     → mapped code
+ *   5. US state code pattern (", CA")   → "US"
+ *   6. Fallback                         → "UNKNOWN"
+ */
+export function inferCountryCode(location: string): string {
+  if (!location || location.trim() === '') return 'UNKNOWN'
+
+  const loc = location.toLowerCase().trim()
+
+  // Remote
+  if (/^remote$/.test(loc) || loc.includes('remote')) return 'REMOTE'
+
+  // Multiple locations
+  if (/^\d+\s+locations?$/.test(loc) || loc === 'multiple locations') return 'MULTI'
+
+  // Explicit ISO-2 at end of string: "New York, NY, US" or "Austin, TX, USA"
+  const isoSuffix = loc.match(/,\s*(usa?|[a-z]{2})\s*$/)
+  if (isoSuffix) {
+    const code = isoSuffix[1].toUpperCase().replace('USA', 'US')
+    if (code === 'US' || US_STATE_CODES.has(code) === false) {
+      // Only trust 2-letter codes that aren't US state codes
+      if (!US_STATE_CODES.has(code)) return code
+    }
+    if (code === 'US') return 'US'
+  }
+
+  // Known country name anywhere in the string
+  for (const [name, code] of Object.entries(COUNTRY_NAME_TO_CODE)) {
+    if (loc.includes(name)) return code
+  }
+
+  // US state code pattern: ", CA" or ", TX" etc.
+  const stateMatch = loc.match(/,\s*([a-z]{2})\b/)
+  if (stateMatch && US_STATE_CODES.has(stateMatch[1].toUpperCase())) return 'US'
+
+  return 'UNKNOWN'
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

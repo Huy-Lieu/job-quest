@@ -1,39 +1,20 @@
 // app/api/search/stream/route.ts
-// SSE streaming job search pipeline — fires Apify + SerpAPI in parallel, then
-// normalize → enrich → dedup → score → store, emitting progress at each stage.
+// SSE streaming wrapper around the shared pipeline core.
+// Owns: auth, search_runs row lifecycle, SSE emission, cancellation.
+// Pipeline logic lives in lib/pipeline/core.ts.
 
-import { NextResponse }    from 'next/server'
+import { NextResponse }     from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions }      from '@/lib/auth'
 import { supabaseAdmin }    from '@/lib/supabase'
-
-import { orchestrateApify }  from '@/lib/apify/orchestrate'
 import { cancelRun, isCancelled, clearCancellation } from '@/lib/search/cancellation'
-import { searchGoogleJobs }  from '@/lib/serp/search'
-import { normalizeJob }      from '@/lib/pipeline/normalize'
-import { normalizeSerpJob }  from '@/lib/serp/normalize'
-import { enrichJobsBatch }   from '@/lib/claude/enricher'
-import { deduplicateJobs }   from '@/lib/pipeline/deduplicate'
-import { scoreJobsBatch, type EnrichedJob } from '@/lib/claude/scorer'
-
-import type { NormalizedJob }     from '@/lib/pipeline/normalize'
-import type { SearchConfig }      from '@/lib/types'
+import { runPipelineCore }  from '@/lib/pipeline/core'
+import type { SearchConfig } from '@/lib/types'
 
 export const maxDuration = 300
 export const dynamic     = 'force-dynamic'
 
 // ── SSE helpers ───────────────────────────────────────────────────────────────
-
-interface ProgressPayload {
-  stage:     string
-  progress:  number
-  message?:  string
-  found?:    number
-  enriched?: number
-  unique?:   number
-  scored?:   number
-  jobsAdded?: number
-}
 
 function makeStream() {
   const encoder = new TextEncoder()
@@ -65,7 +46,6 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url)
   const configId = searchParams.get('configId') ?? searchParams.get('searchConfigId')
-
   if (!configId) {
     return NextResponse.json({ error: 'configId is required' }, { status: 400 })
   }
@@ -74,7 +54,7 @@ export async function GET(request: Request) {
   const { stream, emit, close } = makeStream()
 
   // Run pipeline in background — response streams independently
-  runPipeline(userId, configId, emit, close).catch(err => {
+  runStreamPipeline(userId, configId, emit, close).catch(err => {
     console.error('[search/stream] Unhandled pipeline error:', err)
     close()
   })
@@ -88,15 +68,15 @@ export async function GET(request: Request) {
   })
 }
 
-// ── pipeline ──────────────────────────────────────────────────────────────────
+// ── Streaming pipeline wrapper ────────────────────────────────────────────────
 
-async function runPipeline(
+async function runStreamPipeline(
   userId:   string,
   configId: string,
   emit:     (event: string, data: object) => void,
   close:    () => void,
 ) {
-  // ── Load search config ──────────────────────────────────────────────────────
+  // Load search config
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: config, error: configError } = await (supabaseAdmin as any)
     .from('search_configs')
@@ -111,7 +91,7 @@ async function runPipeline(
     return
   }
 
-  // ── Create search run row ───────────────────────────────────────────────────
+  // Create search_runs row
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: run, error: runError } = await (supabaseAdmin as any)
     .from('search_runs')
@@ -127,8 +107,18 @@ async function runPipeline(
 
   const runId = run.id
 
-  /** Write progress to the polling fallback column and emit SSE event. */
-  async function progress(payload: ProgressPayload) {
+  // Progress map: stage → SSE progress percentage
+  const STAGE_PROGRESS: Record<string, number> = {
+    scraping:      10,
+    normalizing:   25,
+    enriching:     45,
+    deduplicating: 60,
+    scoring:       80,
+  }
+
+  /** Emit SSE progress event and write to polling fallback column. */
+  async function progress(stage: string, data: Record<string, unknown>) {
+    const payload = { stage, progress: STAGE_PROGRESS[stage] ?? 50, ...data }
     emit('progress', payload)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabaseAdmin as any)
@@ -148,7 +138,7 @@ async function runPipeline(
     close()
   }
 
-  /** Abort early if the user cancelled this run. */
+  /** Abort if the user cancelled this run between pipeline stages. */
   async function checkCancelled(): Promise<boolean> {
     if (!isCancelled(runId)) return false
     clearCancellation(runId)
@@ -158,251 +148,61 @@ async function runPipeline(
   }
 
   try {
-    // ── Load active resume ────────────────────────────────────────────────────
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: resume } = await (supabaseAdmin as any)
-      .from('resumes')
-      .select('parsed_skills, parsed_experience, parsed_education')
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .single() as { data: { parsed_skills: string[] | null; parsed_experience: unknown[] | null; parsed_education: Array<{ degree?: string; field?: string }> | null } | null }
+    let lastStage = ''
 
-    const resumeData = resume
-      ? {
-          skills:           resume.parsed_skills ?? [],
-          experience_years: (resume.parsed_experience ?? []).length,
-          education:        { degree: resume.parsed_education?.[0]?.degree ?? 'BS', field: resume.parsed_education?.[0]?.field ?? 'Engineering' },
-          key_keywords:     resume.parsed_skills ?? [],
-        }
-      : { skills: [], experience_years: 0, education: { degree: 'BS', field: 'Engineering' }, key_keywords: [] }
-
-    // ── Stage 1: Scraping ─────────────────────────────────────────────────────
-    await progress({ stage: 'scraping', progress: 10, message: 'Scraping job sources...' })
-
-    const query    = config.keywords.join(' ')
-    const location = config.locations?.[0] ?? 'United States'
-    const serpOffset = config.serp_next_offset ?? 0
-
-    const [apifyRaw, serpResult] = await Promise.allSettled([
-      orchestrateApify(config),
-      config.serp_enabled
-        ? searchGoogleJobs(query, location, 7, serpOffset)
-        : Promise.resolve({ results: [], nextOffset: serpOffset }),
-    ])
-
-    const apifyJobs = apifyRaw.status === 'fulfilled' ? apifyRaw.value : []
-    const serpData  = serpResult.status === 'fulfilled' ? serpResult.value : { results: [], nextOffset: serpOffset }
-
-    if (apifyRaw.status === 'rejected') {
-      console.error('[search/stream] Apify failed:', apifyRaw.reason)
-    }
-    if (serpResult.status === 'rejected') {
-      console.error('[search/stream] SerpAPI failed:', serpResult.reason)
-    }
-
-    if (await checkCancelled()) return
-
-    // ── Stage 2: Normalize ────────────────────────────────────────────────────
-    await progress({ stage: 'normalizing', progress: 25, message: 'Normalizing results...' })
-
-    const normalizedApify: NormalizedJob[] = apifyJobs.map(raw =>
-      normalizeJob(raw, (raw['source'] as string) || 'apify')
-    )
-    const normalizedSerp: NormalizedJob[] = serpData.results.map(normalizeSerpJob)
-    const allNormalized = [...normalizedApify, ...normalizedSerp]
-      .filter(j => j.canonical_title || j.company)
-
-    await progress({ stage: 'normalizing', progress: 25, found: allNormalized.length })
-
-    if (await checkCancelled()) return
-
-    // ── Stage 3: Enrich ───────────────────────────────────────────────────────
-    await progress({ stage: 'enriching', progress: 45, message: 'Enriching with Claude Haiku...' })
-
-    const enrichedFields = allNormalized.length > 0
-      ? await enrichJobsBatch(allNormalized)
-      : []
-
-    await progress({ stage: 'enriching', progress: 45, enriched: enrichedFields.length })
-
-    if (await checkCancelled()) return
-
-    // ── Stage 4: Deduplicate ──────────────────────────────────────────────────
-    await progress({ stage: 'deduplicating', progress: 60, message: 'Deduplicating...' })
-
-    const enrichedForDedup = allNormalized.map((job, i) => ({
-      ...job,
-      enriched: enrichedFields[i],
-    })) as EnrichedJob[]
-
-    // Deduplicator works on NormalizedJob[] (EnrichedJob extends NormalizedJob)
-    const newJobs = await deduplicateJobs(enrichedForDedup)
-
-    // Zip deduped jobs with their enriched fields
-    const enrichedNewJobs: EnrichedJob[] = newJobs.map(job => {
-      const idx = allNormalized.findIndex(n => n.raw_hash === job.raw_hash)
-      return {
-        ...job,
-        enriched: idx >= 0 ? enrichedFields[idx] : enrichedFields[0],
-      } as EnrichedJob
+    const result = await runPipelineCore(config, userId, async (stage, data) => {
+      // Check cancellation at every stage boundary
+      if (await checkCancelled()) throw new Error('__cancelled__')
+      lastStage = stage
+      await progress(stage, data)
     })
 
-    // Persist serp_next_offset now that dedup succeeded
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabaseAdmin as any)
-      .from('search_configs')
-      .update({ serp_next_offset: serpData.nextOffset, last_run_at: new Date().toISOString() })
-      .eq('id', configId)
-
-    await progress({ stage: 'deduplicating', progress: 60, unique: newJobs.length })
-
-    if (await checkCancelled()) return
-
-    // ── Stage 5: Score ────────────────────────────────────────────────────────
-    await progress({ stage: 'scoring', progress: 80, message: 'Scoring with Claude Sonnet...' })
-
-    let scores: Awaited<ReturnType<typeof scoreJobsBatch>> = []
-    if (enrichedNewJobs.length > 0 && resumeData.skills.length > 0) {
-      scores = await scoreJobsBatch(enrichedNewJobs, resumeData)
-    }
-
-    await progress({ stage: 'scoring', progress: 80, scored: scores.length })
-
-    if (await checkCancelled()) return
-
-    // ── Stage 6: Store ────────────────────────────────────────────────────────
-    let insertedCount = 0
-    let scoredCount   = 0
-
-    if (enrichedNewJobs.length > 0) {
-      const now = new Date().toISOString()
-
+    // Handle cancellation that fired during the last stage
+    if (isCancelled(runId)) {
+      clearCancellation(runId)
+      emit('cancelled', { message: 'Search cancelled by user' })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: inserted, error: insertError } = await (supabaseAdmin as any)
-        .from('jobs')
-        .upsert(
-          enrichedNewJobs.map(({ source: _src, enriched: e, ...job }) => ({
-            ...job,
-            scraped_at:           now,
-            role_summary:         e.role_summary         || null,
-            skills_required:      e.skills_required,
-            skills_preferred:     e.skills_preferred,
-            tech_stack:           e.tech_stack,
-            work_mode:            e.work_mode,
-            visa_sponsorship:     e.visa_sponsorship,
-            experience_years_min: e.experience_years_min,
-            experience_years_max: e.experience_years_max,
-            education_level:      e.education_level,
-            security_clearance:   e.security_clearance,
-            benefits_highlights:  e.benefits_highlights,
-            languages_required:   e.languages_required,
-            seniority_level:      e.seniority_level,
-            role_type:            e.role_type,
-            salary_min:           job.salary_min ?? e.salary_min,
-            salary_max:           job.salary_max ?? e.salary_max,
-            salary_currency:      job.salary_currency || e.salary_currency || 'USD',
-            enriched_at:          now,
-          })),
-          { onConflict: 'raw_hash', ignoreDuplicates: true }
-        )
-        .select('id, raw_hash') as { data: { id: string; raw_hash: string }[] | null; error: unknown }
-
-      if (insertError) {
-        await fail('Jobs insert failed: ' + String(insertError))
-        return
-      }
-
-      const insertedJobs   = inserted ?? []
-      insertedCount        = insertedJobs.length
-      const hashToJobId    = new Map(insertedJobs.map(j => [j.raw_hash, j.id]))
-
-      // job_sources — plain insert with ignoreDuplicates lets the DB's partial
-      // unique index (source_name, source_job_id WHERE source_job_id IS NOT NULL)
-      // handle dedup via ON CONFLICT DO NOTHING. No need to split on null.
-      const allSources = enrichedNewJobs
-        .map(nj => {
-          const jobId = hashToJobId.get(nj.raw_hash)
-          if (!jobId) return null
-          return {
-            job_id:        jobId,
-            source_name:   nj.source.name,
-            source_url:    nj.source.url,
-            source_job_id: nj.source.source_job_id ?? null,
-          }
-        })
-        .filter(Boolean)
-
-      if (allSources.length > 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error: sourcesError } = await (supabaseAdmin as any)
-          .from('job_sources')
-          .insert(allSources, { ignoreDuplicates: true })
-        if (sourcesError) {
-          console.error('[search/stream] job_sources insert failed:', JSON.stringify(sourcesError))
-        }
-      }
-
-      // job_scores
-      if (scores.length > 0) {
-        const scoresToInsert = scores
-          .map((s, i) => {
-            if (!s) return null
-            const jobId = hashToJobId.get(enrichedNewJobs[i]?.raw_hash ?? '')
-            if (!jobId) return null
-            return {
-              job_id:         jobId,
-              user_id:        userId,
-              fit_score:      s.fit_score,
-              fit_reason:     s.fit_reason,
-              skills_matched: s.skills_matched,
-              skills_missing: s.skills_missing,
-              recommended:    s.recommended,
-            }
-          })
-          .filter(Boolean)
-
-        if (scoresToInsert.length > 0) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { error: scoresError } = await (supabaseAdmin as any)
-            .from('job_scores')
-            .upsert(scoresToInsert, { onConflict: 'job_id,user_id', ignoreDuplicates: true })
-          if (scoresError) {
-            console.error('[search/stream] job_scores upsert failed:', String(scoresError))
-          } else {
-            scoredCount = scoresToInsert.length
-          }
-        }
-      }
+      await (supabaseAdmin as any)
+        .from('search_runs')
+        .update({ status: 'cancelled', completed_at: new Date().toISOString() })
+        .eq('id', runId)
+      close()
+      return
     }
 
-    // ── Update search run ─────────────────────────────────────────────────────
+    void lastStage // suppress unused warning
+
+    // Mark run complete
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabaseAdmin as any)
       .from('search_runs')
       .update({
         status:        'complete',
         completed_at:  new Date().toISOString(),
-        jobs_found:    allNormalized.length,
-        jobs_new:      insertedCount,
-        jobs_enriched: enrichedFields.length,
-        jobs_scored:   scoredCount,
+        jobs_found:    result.found,
+        jobs_new:      result.inserted,
+        jobs_enriched: result.enriched,
+        jobs_scored:   result.scored,
       })
       .eq('id', runId)
 
-    // ── Complete ──────────────────────────────────────────────────────────────
     emit('complete', {
       stage:     'complete',
       progress:  100,
-      found:     allNormalized.length,
-      enriched:  enrichedFields.length,
-      unique:    newJobs.length,
-      scored:    scoredCount,
-      jobsAdded: insertedCount,
+      found:     result.found,
+      enriched:  result.enriched,
+      unique:    result.unique,
+      scored:    result.scored,
+      jobsAdded: result.inserted,
       runId,
     })
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    if (message === '__cancelled__') {
+      // Cancellation already handled inside the onProgress callback
+      return
+    }
     await fail(message)
     return
   }
@@ -410,6 +210,8 @@ async function runPipeline(
   clearCancellation(runId)
   close()
 }
+
+// ── DELETE — cancel an in-flight run ─────────────────────────────────────────
 
 export async function DELETE(request: Request) {
   const session = await getServerSession(authOptions)
@@ -419,9 +221,9 @@ export async function DELETE(request: Request) {
   const runId = searchParams.get('runId')
   if (!runId) return NextResponse.json({ error: 'runId is required' }, { status: 400 })
 
-  // Signal the in-flight pipeline to abort between stages
   cancelRun(runId)
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { error } = await (supabaseAdmin as any)
     .from('search_runs')
     .update({ status: 'cancelled', completed_at: new Date().toISOString(), error_text: 'Cancelled by user' })
@@ -433,9 +235,8 @@ export async function DELETE(request: Request) {
   return NextResponse.json({ ok: true })
 }
 
-// POST variant — same as GET but reads configId from JSON body instead of query params.
-// The client sends { configId } as a POST body; we forward to GET by constructing an
-// equivalent Request with configId in the search params.
+// ── POST — same as GET but reads configId from JSON body ──────────────────────
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}))
   const configId = body?.configId

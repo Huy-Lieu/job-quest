@@ -135,6 +135,94 @@ interface WorkdayJob {
   bulletFields?:  string[]
 }
 
+// Maps Workday's ISO country code prefix → full country name.
+// Workday returns locations as "CC, Region, City" e.g. "US, CA, Santa Clara".
+const WORKDAY_COUNTRY_CODES: Record<string, string> = {
+  US: 'United States',
+  GB: 'United Kingdom',
+  UK: 'United Kingdom',
+  CA: 'Canada',
+  AU: 'Australia',
+  DE: 'Germany',
+  FR: 'France',
+  NL: 'Netherlands',
+  SE: 'Sweden',
+  NO: 'Norway',
+  DK: 'Denmark',
+  FI: 'Finland',
+  CH: 'Switzerland',
+  AT: 'Austria',
+  BE: 'Belgium',
+  ES: 'Spain',
+  PT: 'Portugal',
+  IT: 'Italy',
+  PL: 'Poland',
+  CZ: 'Czech Republic',
+  HU: 'Hungary',
+  RO: 'Romania',
+  IL: 'Israel',
+  IN: 'India',
+  JP: 'Japan',
+  KR: 'South Korea',
+  CN: 'China',
+  SG: 'Singapore',
+  HK: 'Hong Kong',
+  TW: 'Taiwan',
+  BR: 'Brazil',
+  MX: 'Mexico',
+  AR: 'Argentina',
+  ZA: 'South Africa',
+  AE: 'United Arab Emirates',
+  VN: 'Vietnam',
+}
+
+/**
+ * Normalise a Workday locationsText string into a human-readable format
+ * compatible with the pipeline's generic location filter.
+ *
+ * Input formats observed from the Workday CXS API:
+ *   "US, CA, Santa Clara"    → "Santa Clara, CA, United States"
+ *   "Israel, Yokneam"        → "Yokneam, Israel"
+ *   "Vietnam, Ho Chi Minh City" → "Ho Chi Minh City, Vietnam"
+ *   "2 Locations"            → "Multiple Locations"
+ *   ""  / undefined          → "Unknown"
+ *
+ * The output always ends with the full country name so that a filter checking
+ * for "United States" or "Israel" works with a simple substring match.
+ */
+function normalizeWorkdayLocation(raw: string | undefined): string {
+  if (!raw || raw.trim() === '') return 'Unknown'
+
+  const trimmed = raw.trim()
+
+  // "N Locations" — multi-location posting, keep as a passthrough sentinel
+  if (/^\d+\s+locations?$/i.test(trimmed)) return 'Multiple Locations'
+
+  const parts = trimmed.split(',').map(p => p.trim()).filter(Boolean)
+  if (parts.length === 0) return 'Unknown'
+
+  // First part is usually the country code (e.g. "US") or full country name
+  const firstUpper = parts[0].toUpperCase()
+  const country    = WORKDAY_COUNTRY_CODES[firstUpper]
+
+  if (country) {
+    // Known 2-letter ISO code — reorder to "City, State, Country"
+    // parts: ["US", "CA", "Santa Clara"] → "Santa Clara, CA, United States"
+    const rest = parts.slice(1).reverse()   // reverse so city comes first
+    return [...rest, country].join(', ')
+  }
+
+  // No recognised code — treat first part as country name, rest as city
+  // e.g. ["Israel", "Yokneam"] → "Yokneam, Israel"
+  // e.g. ["Vietnam", "Ho Chi Minh City"] → "Ho Chi Minh City, Vietnam"
+  const cityParts = parts.slice(1)
+  if (cityParts.length > 0) {
+    return [...cityParts, parts[0]].join(', ')
+  }
+
+  return trimmed
+}
+
 /**
  * Fetch the full job description for a single Workday job.
  * The CXS listing API returns only bullet fragments — this detail call
@@ -236,7 +324,7 @@ export async function fetchWorkdayBoard(
       return {
         title:         j.title ?? '',
         company:       t.tenant,
-        location:      j.locationsText ?? 'Unknown',
+        location:      normalizeWorkdayLocation(j.locationsText),
         url,
         description:   fullDescription,
         postedAt:      j.postedOn ?? null,
