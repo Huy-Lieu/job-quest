@@ -282,6 +282,9 @@ export async function runPipelineCore(
           salary_max:           job.salary_max ?? e.salary_max,
           salary_currency:      job.salary_currency || e.salary_currency || 'USD',
           enriched_at:          now,
+          role_intel:           e.role_intel ?? null,
+          application_deadline: e.application_deadline ?? null,
+          salary_levels:        e.salary_levels ?? null,
         })),
         { onConflict: 'raw_hash', ignoreDuplicates: true }
       )

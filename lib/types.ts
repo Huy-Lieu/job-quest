@@ -233,6 +233,12 @@ export interface JobWithScore {
   seniority_level:      Seniority | null
   role_type:            RoleType | null
   enriched_at:          string | null
+  // Candidate-facing JD intelligence (written by Claude Haiku enrichment pass)
+  role_intel:           import('./claude/enricher').RoleIntel | null
+  // Application deadline extracted from JD text (e.g. "Applications accepted until May 1, 2026")
+  application_deadline: string | null   // ISO date string
+  // Per-level salary ranges (e.g. NVIDIA L4/L5). Single range stored in salary_min/max.
+  salary_levels:        Array<{ level: string; min: number; max: number }> | null
 }
 
 export interface SearchConfig {

@@ -1,9 +1,10 @@
 'use client'
 
+import { useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Briefcase, Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import { Briefcase, Loader2, RefreshCw, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import type { JobWithScore } from '@/lib/types'
 import { SOURCE_LABELS, AVAILABLE_SOURCES } from '@/app/dashboard/jobs/constants'
 import { JobListRow, JobDetailEmptyState } from '@/app/components/Jobs/JobListRow'
@@ -48,9 +49,11 @@ export function JobsTab({
   deleteOne, deleteBulk, setTab,
 }: JobsTabProps) {
   const activeJob = activeJobId ? jobs.find((j) => j.id === activeJobId) ?? null : null
+  const [listCollapsed, setListCollapsed] = useState(false)
 
   return (
     <div className="space-y-4">
+      {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-3 p-3 bg-muted/50 rounded-lg">
         <div className="flex items-center gap-2">
           <label className="text-xs font-medium text-muted-foreground whitespace-nowrap">Min score</label>
@@ -105,20 +108,47 @@ export function JobsTab({
 
       {jobs.length > 0 && (
         <>
-          {selectedIds.size > 0 ? (
-            <div className="flex items-center justify-between rounded-lg border border-primary/40 bg-primary/5 px-4 py-2">
-              <p className="text-sm font-medium">{selectedIds.size} selected</p>
-              <div className="flex items-center gap-2">
-                <Button variant="destructive" size="sm" onClick={deleteBulk} disabled={bulkDeleting} className="gap-1">
-                  {bulkDeleting ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Removing…</> : <><Trash2 className="h-3.5 w-3.5" /> Remove {selectedIds.size}</>}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={clearSelection}>Cancel</Button>
+          {/* Selection bar / job count row — includes collapse toggle on desktop */}
+          <div className="flex items-center justify-between">
+            {selectedIds.size > 0 ? (
+              <div className="flex items-center justify-between w-full rounded-lg border border-primary/40 bg-primary/5 px-4 py-2">
+                <p className="text-sm font-medium">{selectedIds.size} selected</p>
+                <div className="flex items-center gap-2">
+                  <Button variant="destructive" size="sm" onClick={deleteBulk} disabled={bulkDeleting} className="gap-1">
+                    {bulkDeleting
+                      ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Removing…</>
+                      : <><Trash2 className="h-3.5 w-3.5" /> Remove {selectedIds.size}</>}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={clearSelection}>Cancel</Button>
+                </div>
               </div>
-            </div>
-          ) : <p className="text-xs text-muted-foreground">{total} jobs found</p>}
+            ) : (
+              <p className="text-xs text-muted-foreground">{total} jobs found</p>
+            )}
 
-          <div className="hidden lg:grid grid-cols-[minmax(380px,42%)_1fr] gap-4 h-[calc(100vh-280px)] min-h-[520px]">
-            <div className="rounded-lg border overflow-hidden flex flex-col">
+            {/* Collapse toggle — desktop only */}
+            <button
+              onClick={() => setListCollapsed(c => !c)}
+              className="hidden lg:flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors ml-3 flex-shrink-0"
+              title={listCollapsed ? 'Show job list' : 'Hide job list'}
+            >
+              {listCollapsed
+                ? <><PanelLeftOpen className="h-4 w-4" /> Show list</>
+                : <><PanelLeftClose className="h-4 w-4" /> Hide list</>
+              }
+            </button>
+          </div>
+
+          {/* Desktop split layout */}
+          <div className={`hidden lg:grid gap-4 h-[calc(100vh-280px)] min-h-[520px] transition-all duration-300 ${
+            listCollapsed
+              ? 'grid-cols-[0px_1fr]'
+              : 'grid-cols-[minmax(320px,36%)_1fr]'
+          }`}>
+            {/* Left panel — job list */}
+            <div className={`rounded-lg border overflow-hidden flex flex-col transition-all duration-300 ${
+              listCollapsed ? 'opacity-0 pointer-events-none border-0' : 'opacity-100'
+            }`}>
               <div className="flex-1 overflow-y-auto">
                 {jobs.map((job) => (
                   <JobListRow key={job.id} job={job} active={activeJobId === job.id}
@@ -127,11 +157,17 @@ export function JobsTab({
                 ))}
               </div>
             </div>
+
+            {/* Right panel — job detail (full width when list collapsed) */}
             <div className="rounded-lg border overflow-hidden">
-              {activeJob ? <JobDetailPane job={activeJob} onDelete={deleteOne} /> : <JobDetailEmptyState />}
+              {activeJob
+                ? <JobDetailPane job={activeJob} onDelete={deleteOne} />
+                : <JobDetailEmptyState />
+              }
             </div>
           </div>
 
+          {/* Mobile layout */}
           <div className="lg:hidden rounded-lg border overflow-hidden">
             {jobs.map((job) => (
               <JobListRow key={job.id} job={job} active={activeJobId === job.id}

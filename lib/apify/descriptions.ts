@@ -52,6 +52,7 @@ export async function enrichWorkdayDescriptions(
   let enrichedCount = 0
 
   for (const { i, url } of workdayIndices) {
+    const t0 = Date.now()
     try {
       const items = await runApifyActor(
         'apify/rag-web-browser',
@@ -60,25 +61,37 @@ export async function enrichWorkdayDescriptions(
       )
 
       const first = items[0] as Record<string, unknown> | undefined
-      if (!first) continue
+      if (!first) {
+        console.warn(`[descriptions] job ${i}: no result from rag-web-browser (${Date.now() - t0}ms)`)
+        continue
+      }
 
       // Prefer full markdown; fall back to metadata.description (Workday SPA
       // sometimes renders content into metadata but not markdown conversion)
       const rawMarkdown = typeof first.markdown === 'string' ? first.markdown.trim() : ''
-      const meta = first.metadata as Record<string, unknown> | undefined
-      const rawMeta = typeof meta?.description === 'string' ? meta.description.trim() : ''
+      const meta        = first.metadata as Record<string, unknown> | undefined
+      const rawMeta     = typeof meta?.description === 'string' ? meta.description.trim() : ''
 
       const content = rawMarkdown.length >= 100 ? rawMarkdown : rawMeta
-      if (content.length < 100) continue
+      if (content.length < 100) {
+        console.warn(`[descriptions] job ${i}: content too short (markdown=${rawMarkdown.length} meta=${rawMeta.length}) (${Date.now() - t0}ms)`)
+        continue
+      }
 
+      // Re-inject newlines before section headers that got collapsed into one paragraph.
+      // Workday RAG-fetched markdown sometimes returns the full JD as a single block of text.
+      const withBreaks = content.replace(
+        /([.!?])\s+(What you[''']ll be doing|What we need to see|What we[''']re looking for|Ways to stand out from the crowd|Ways to stand out|About the role|About the team|About you|Responsibilities|Requirements|Qualifications|Preferred qualifications|Nice to have|Bonus points|Benefits|Who you are|The role|Your impact|Your background|Minimum qualifications|Basic qualifications|Key responsibilities|What you will do|What you['']ll do|What you bring|What you['']ll bring|You will|You have|We offer|We provide)/gi,
+        '$1\n\n$2'
+      )
       // Strip excessive whitespace but preserve paragraph breaks
-      const cleaned = content.replace(/\n{3,}/g, '\n\n').trim()
+      const cleaned = withBreaks.replace(/\n{3,}/g, '\n\n').trim()
       enriched[i] = { ...enriched[i], description: cleaned }
       enrichedCount++
-      console.log('[descriptions] fetched JD for job ' + i + ' (' + (rawMarkdown.length >= 100 ? 'markdown' : 'metadata') + ')')
+      console.log(`[descriptions] job ${i} ok: ${Date.now() - t0}ms, source=${rawMarkdown.length >= 100 ? 'markdown' : 'metadata'}, chars=${cleaned.length}`)
     } catch (err) {
       // Individual failure -- keep original bullet-fragment description
-      console.warn('[descriptions] failed for job ' + i + ': ' + String(err))
+      console.warn(`[descriptions] job ${i} failed: ${String(err)} (${Date.now() - t0}ms)`)
     }
   }
 

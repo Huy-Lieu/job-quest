@@ -59,11 +59,20 @@ export function normalizeJob(raw: RawApifyJob, sourceName: string): NormalizedJo
 
   const location = firstStr(raw.location, raw.jobLocation, raw.city) || 'Unknown'
 
+  // Infer country from location string; if that yields MULTI (Workday "Multiple Locations"),
+  // attempt a secondary extraction from the source URL, which often embeds the real country
+  // (e.g. /job/Israel-Tel-Aviv/..., /job/Mexico-Remote/..., /job/US-CA-Santa-Clara/...).
+  let country_code = inferCountryCode(location)
+  if (country_code === 'MULTI') {
+    const urlCountry = inferCountryFromUrl(firstStr(raw.url, raw.jobUrl, raw.applyUrl, raw.link))
+    if (urlCountry) country_code = urlCountry
+  }
+
   return {
     canonical_title: title,
     company,
     location,
-    country_code:    inferCountryCode(location),
+    country_code,
     description,
     salary_min,
     salary_max,
@@ -193,6 +202,70 @@ export function inferCountryCode(location: string): string {
   if (stateMatch && US_STATE_CODES.has(stateMatch[1].toUpperCase())) return 'US'
 
   return 'UNKNOWN'
+}
+
+/**
+ * Secondary country detection for Workday-style URLs where the location string
+ * was "Multiple Locations" → MULTI. Workday embeds country/city in the path:
+ *   .../job/Israel-Tel-Aviv/...          → IL
+ *   .../job/Mexico-Remote/...            → MX
+ *   .../job/US-CA-Santa-Clara/...        → US
+ *   .../job/Germany-Munich/...           → DE
+ *   .../job/United-Kingdom-London/...    → GB
+ *   .../job/Canada-Ontario-Toronto/...   → CA
+ *
+ * Returns the ISO code if recognized, or null (keep MULTI / let filter decide).
+ */
+function inferCountryFromUrl(url: string): string | null {
+  if (!url) return null
+
+  // Extract the segment after /job/ before the next slash
+  const segment = url.match(/\/job\/([^/?#]+)/)?.[1]
+  if (!segment) return null
+
+  const seg = segment.toLowerCase().replace(/-/g, ' ')
+
+  // Check for US state codes: "US CA Santa Clara", "US TX Austin"
+  if (/^us\b/.test(seg)) return 'US'
+
+  // Map known country prefixes (Workday uses full English country name at start)
+  const urlCountryPrefixes: Array<[RegExp, string]> = [
+    [/^israel\b/,          'IL'],
+    [/^mexico\b/,          'MX'],
+    [/^canada\b/,          'CA'],
+    [/^united kingdom\b/,  'GB'],
+    [/^germany\b/,         'DE'],
+    [/^france\b/,          'FR'],
+    [/^netherlands\b/,     'NL'],
+    [/^sweden\b/,          'SE'],
+    [/^norway\b/,          'NO'],
+    [/^denmark\b/,         'DK'],
+    [/^finland\b/,         'FI'],
+    [/^switzerland\b/,     'CH'],
+    [/^austria\b/,         'AT'],
+    [/^belgium\b/,         'BE'],
+    [/^spain\b/,           'ES'],
+    [/^portugal\b/,        'PT'],
+    [/^italy\b/,           'IT'],
+    [/^poland\b/,          'PL'],
+    [/^india\b/,           'IN'],
+    [/^japan\b/,           'JP'],
+    [/^south korea\b/,     'KR'],
+    [/^china\b/,           'CN'],
+    [/^singapore\b/,       'SG'],
+    [/^australia\b/,       'AU'],
+    [/^brazil\b/,          'BR'],
+    [/^taiwan\b/,          'TW'],
+    [/^hong kong\b/,       'HK'],
+    [/^united arab emirates\b/, 'AE'],
+    [/^south africa\b/,    'ZA'],
+  ]
+
+  for (const [rx, code] of urlCountryPrefixes) {
+    if (rx.test(seg)) return code
+  }
+
+  return null
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
