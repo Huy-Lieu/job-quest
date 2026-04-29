@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, ArrowRight,
   Brain, Target, Zap, Users, Clock, CheckCircle2,
   AlertCircle, Lightbulb, DollarSign, Briefcase, GraduationCap, CalendarClock,
-  Building2, Loader2, RefreshCw,
+  Building2, Loader2, RefreshCw, Type,
 } from 'lucide-react'
 import type { JobWithScore, IntelSignal, RoleCompanyIntel } from '@/lib/types'
 import type { RoleIntel } from '@/lib/claude/enricher'
@@ -26,61 +26,138 @@ function isHtml(text: string): boolean {
   return /<[a-z][\s\S]*>/i.test(text)
 }
 
-function renderHtmlDescription(html: string): React.ReactNode {
-  const normalized = html
+// Font size levels cycled by the A-/A+ toggle
+const FONT_SIZE_CLASSES = ['text-sm', 'text-base', 'text-lg'] as const
+type FontSizeClass = typeof FONT_SIZE_CLASSES[number]
+
+/**
+ * HTML-aware description renderer.
+ * Walks the HTML respecting the original author's structure:
+ *   <ul>/<ol> + <li>  → bullet list (with preceding <strong>/<h*> as section header)
+ *   <p>               → paragraph break
+ *   <br>              → line break
+ */
+function renderHtmlDescription(html: string, fontSize: FontSizeClass = 'text-base'): React.ReactNode {
+  let s = html
+    .replace(/\r\n?/g, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/li>/gi, '|||LI|||')
-    .replace(/<\/ul>|<\/ol>/gi, '\n')
-    .replace(/<li[^>]*>/gi, '')
-    .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**')
-    .replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**')
+    .replace(/<\/p>\s*/gi,            '|||P|||')
+    .replace(/<p[^>]*>\s*/gi,          '')
+    .replace(/<\/li>\s*/gi,           '|||LI|||')
+    .replace(/<li[^>]*>\s*/gi,         '|||LISTART|||')
+    .replace(/<\/ul>\s*|<\/ol>\s*/gi,'|||P|||')
+    .replace(/<ul[^>]*>|<ol[^>]*>/gi,   '')
+    .replace(/<\/h[1-6]>\s*/gi,       '|||HEND|||')
+    .replace(/<h[1-6][^>]*>\s*/gi,     '|||HSTART|||')
+    .replace(/<\/strong>|<\/b>/gi,    '**')
+    .replace(/<strong[^>]*>|<b[^>]*>/gi,'**')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
     .replace(/&quot;/g, '"')
-  const lines = normalized.split(/\n/).map(l => l.trim()).filter(Boolean)
-  return renderPlainLines(lines, 0)
-}
+    .replace(/&#39;/g,  "'")
 
-function renderPlainLines(lines: string[], startKey = 0): React.ReactNode {
-  const sections: React.ReactNode[] = []
-  let key = startKey
+  interface HSection { header: string | null; items: string[]; isList: boolean }
+  const sections: HSection[] = []
+  let cur: HSection = { header: null, items: [], isList: false }
+  let pendingHeader: string | null = null
 
-  interface Section { header: string | null; items: string[] }
-  const parsed: Section[] = []
-  let current: Section = { header: null, items: [] }
+  function flushCurrent() {
+    const items = cur.items.map(i => i.trim()).filter(Boolean)
+    if (cur.header || items.length > 0) sections.push({ ...cur, items })
+    cur = { header: null, items: [], isList: false }
+  }
 
-  for (const line of lines) {
-    const liParts = line.split('|||LI|||').map(s => s.trim()).filter(Boolean)
-    if (liParts.length > 1) { liParts.forEach(p => current.items.push(p)); continue }
-    const cleanLine = line.replace(/\*\*(.*?)\*\*/g, '$1').trim()
-    if (JD_SECTION_HEADERS.test(cleanLine)) {
-      if (current.header !== null || current.items.length > 0) parsed.push(current)
-      current = { header: cleanLine.replace(/[:\s]+$/, ''), items: [] }
+  const SENTINEL_RE = /\|\|\|(?:P|LI|LISTART|HSTART|HEND)\|\|\|/g
+  const parts: Array<{ type: 'text' | 'P' | 'LI' | 'LISTART' | 'HSTART' | 'HEND'; value: string }> = []
+  let last = 0, mh: RegExpExecArray | null
+  while ((mh = SENTINEL_RE.exec(s)) !== null) {
+    if (mh.index > last) parts.push({ type: 'text', value: s.slice(last, mh.index) })
+    const tag = mh[0].replace(/\|/g, '') as 'P' | 'LI' | 'LISTART' | 'HSTART' | 'HEND'
+    parts.push({ type: tag, value: '' })
+    last = mh.index + mh[0].length
+  }
+  if (last < s.length) parts.push({ type: 'text', value: s.slice(last) })
+
+  let inList = false, listItems: string[] = [], currentText = ''
+
+  function flushText() {
+    const t = currentText.trim(); currentText = ''
+    if (!t) return
+    const clean = t.replace(/\*\*/g, '').trim()
+    if (JD_SECTION_HEADERS.test(clean)) {
+      flushCurrent(); cur.header = clean.replace(/[:\s]+$/, '')
     } else {
-      current.items.push(line)
+      cur.items.push(...t.split('\n').map(l => l.trim()).filter(Boolean))
     }
   }
-  if (current.header !== null || current.items.length > 0) parsed.push(current)
 
-  for (const section of parsed) {
+  function flushList() {
+    if (listItems.length === 0) return
+    flushCurrent()
+    cur.header = pendingHeader; cur.items = listItems.map(i => i.trim()).filter(Boolean); cur.isList = true
+    pendingHeader = null; listItems = []; inList = false
+    flushCurrent()
+  }
+
+  for (const part of parts) {
+    switch (part.type) {
+      case 'HSTART': flushText(); break
+      case 'HEND': {
+        const h = currentText.replace(/\*\*/g, '').trim(); currentText = ''
+        if (JD_SECTION_HEADERS.test(h)) {
+          if (inList) flushList(); flushCurrent(); pendingHeader = h.replace(/[:\s]+$/, '')
+        } else { cur.items.push(`**${h}**`) }
+        break
+      }
+      case 'LISTART':
+        if (!inList) {
+          flushText()
+          if (!pendingHeader && cur.items.length > 0) {
+            const lastItem = cur.items[cur.items.length - 1].replace(/\*\*/g, '').trim()
+            if (JD_SECTION_HEADERS.test(lastItem)) { pendingHeader = lastItem.replace(/[:\s]+$/, ''); cur.items.pop() }
+          }
+          inList = true
+        }
+        currentText = ''; break
+      case 'LI':
+        if (inList) { const item = currentText.trim(); if (item) listItems.push(item); currentText = '' }
+        break
+      case 'P':
+        if (inList) { flushList() } else { flushText(); flushCurrent() }
+        break
+      case 'text': currentText += part.value; break
+    }
+  }
+  if (inList) { flushList() } else { flushText(); flushCurrent() }
+  return renderSections(sections, fontSize)
+}
+
+function renderSections(
+  sections: Array<{ header: string | null; items: string[]; isList: boolean }>,
+  fontSize: FontSizeClass,
+): React.ReactNode {
+  const nodes: React.ReactNode[] = []
+  let key = 0
+  for (const section of sections) {
     if (section.header) {
-      sections.push(
+      nodes.push(
         <p key={key++} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mt-4 mb-1.5">
           {section.header}
         </p>
       )
     }
-    const looksLikeList = section.items.every(i => i.length < 200)
-    if (looksLikeList && section.items.length > 1) {
-      sections.push(
-        <ul key={key++} className="space-y-1 mb-1">
+    const hasHeader = section.header !== null
+    const allShort  = section.items.every(i => i.replace(/\*\*/g, '').length < 300)
+    const useList   = section.isList || (section.items.length > 0 && (hasHeader || (section.items.length > 1 && allShort)))
+    if (useList) {
+      nodes.push(
+        <ul key={key++} className="space-y-1.5 mb-3">
           {section.items.map((item, i) => (
-            <li key={i} className="flex gap-2 text-sm text-foreground leading-relaxed">
-              <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-muted-foreground/50 flex-shrink-0" />
+            <li key={i} className={`flex gap-2 ${fontSize} text-foreground leading-relaxed`}>
+              <span className="mt-2 h-1.5 w-1.5 rounded-full bg-muted-foreground/50 flex-shrink-0" />
               <span>{renderInlineBold(item)}</span>
             </li>
           ))}
@@ -88,15 +165,34 @@ function renderPlainLines(lines: string[], startKey = 0): React.ReactNode {
       )
     } else {
       section.items.forEach(item => {
-        sections.push(
-          <p key={key++} className="text-sm text-foreground leading-relaxed mb-1.5">
+        nodes.push(
+          <p key={key++} className={`${fontSize} text-foreground leading-relaxed mb-2`}>
             {renderInlineBold(item)}
           </p>
         )
       })
     }
   }
-  return <>{sections}</>
+  return <>{nodes}</>
+}
+
+function renderPlainLines(lines: string[], _startKey = 0, fontSize: FontSizeClass = 'text-base'): React.ReactNode {
+  interface Section { header: string | null; items: string[]; isList: boolean }
+  const parsed: Section[] = []
+  let current: Section = { header: null, items: [], isList: false }
+  for (const line of lines) {
+    const cleanLine = line.replace(/\*\*(.*?)\*\*/g, '$1').trim()
+    if (JD_SECTION_HEADERS.test(cleanLine)) {
+      if (current.header !== null || current.items.length > 0) parsed.push(current)
+      current = { header: cleanLine.replace(/[:\s]+$/, ''), items: [], isList: false }
+    } else {
+      const stripped = line.replace(/^[-•·▪▸–—\*]\s+/, '').trim()
+      if (stripped !== line.trim()) current.isList = true
+      current.items.push(stripped || line.trim())
+    }
+  }
+  if (current.header !== null || current.items.length > 0) parsed.push(current)
+  return renderSections(parsed, fontSize)
 }
 
 function renderInlineBold(text: string): React.ReactNode {
@@ -123,11 +219,11 @@ function decodeEntities(text: string): string {
     .replace(/&nbsp;/g, ' ')
 }
 
-function renderJobDescription(raw: string): React.ReactNode {
+function renderJobDescription(raw: string, fontSize: FontSizeClass = 'text-base'): React.ReactNode {
   if (!raw) return null
   // Decode HTML entities regardless of whether the text is HTML or plain text
   const decoded = decodeEntities(raw)
-  if (isHtml(decoded)) return renderHtmlDescription(decoded)
+  if (isHtml(decoded)) return renderHtmlDescription(decoded, fontSize)
   // Split "Header: content" inline into separate lines so the section header
   // regex can match the keyword as a standalone line
   const withHeaderSplit = decoded.replace(
@@ -142,9 +238,9 @@ function renderJobDescription(raw: string): React.ReactNode {
         '$1\n$2'
       )
       .split(/\n/).map(l => l.trim()).filter(Boolean)
-    return renderPlainLines(split)
+    return renderPlainLines(split, 0, fontSize)
   }
-  return renderPlainLines(lines)
+  return renderPlainLines(lines, 0, fontSize)
 }
 
 // ── JD Intelligence helpers ───────────────────────────────────────────────────
@@ -604,7 +700,7 @@ function JdIntelligenceSection({
 
 // ── Company Intel tab ─────────────────────────────────────────────────────────
 
-interface FetchedIntel {
+export interface FetchedIntel {
   // Company-layer (cached, shared)
   company_snapshot?:    { stage?: string | null; headcount?: string | null; revenue?: string | null; core_business?: string | null; key_products?: string | null } | null
   strategic_signals?:   IntelSignal[] | null
@@ -649,10 +745,24 @@ function toSignals(v: unknown): IntelSignal[] {
   return []
 }
 
-function CompanyIntelTab({ job }: { job: JobWithScore }) {
-  const [loading,   setLoading]   = useState(false)
-  const [intel,     setIntel]     = useState<FetchedIntel | null>(null)
-  const [error,     setError]     = useState<string | null>(null)
+function CompanyIntelTab({
+  job,
+  intelCache,
+  onIntelFetched,
+}: {
+  job:            JobWithScore
+  intelCache:     Map<string, FetchedIntel>
+  onIntelFetched: (jobId: string, intel: FetchedIntel) => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  // Resolve intel: prefer live cache, then fall back to role_company_intel on the job row
+  const cached = intelCache.get(job.id) ?? null
+  const fromRow: FetchedIntel | null = job.role_company_intel
+    ? ({ role_company_intel: job.role_company_intel } as FetchedIntel)
+    : null
+  const intel = cached ?? fromRow
 
   async function fetchIntel() {
     setLoading(true)
@@ -668,7 +778,8 @@ function CompanyIntelTab({ job }: { job: JobWithScore }) {
       )
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Request failed')
-      setIntel(json.intel as FetchedIntel)
+      const fetched = json.intel as FetchedIntel
+      onIntelFetched(job.id, fetched)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -841,14 +952,22 @@ export function JobDetailPane({
   job,
   onDelete,
   onClose,
+  intelCache,
+  onIntelFetched,
 }: {
-  job:      JobWithScore
-  onDelete: (id: string) => void
-  onClose?: () => void
+  job:            JobWithScore
+  onDelete:       (id: string) => void
+  onClose?:       () => void
+  intelCache:     Map<string, FetchedIntel>
+  onIntelFetched: (jobId: string, intel: FetchedIntel) => void
 }) {
-  const [activeTab, setActiveTab] = useState<'details' | 'company'>('details')
-  const [descOpen,  setDescOpen]  = useState(false)
-  const [intelOpen, setIntelOpen] = useState(true)
+  const [activeTab,    setActiveTab]    = useState<'details' | 'company'>('details')
+  const [intelOpen,    setIntelOpen]    = useState(true)
+  const [fontSizeIdx,  setFontSizeIdx]  = useState(1)
+  const [enriching,    setEnriching]    = useState(false)
+  const [enrichError,  setEnrichError]  = useState<string | null>(null)
+  const [localRoleIntel, setLocalRoleIntel] = useState<RoleIntel | null>(null)
+  const fontSize = FONT_SIZE_CLASSES[fontSizeIdx]
 
   const score      = job.job_scores?.[0]
   const viaSource  = pickBestSource(job.job_sources)
@@ -859,7 +978,22 @@ export function JobDetailPane({
   const salaryText  = job.salary_min
     ? `$${fmt(job.salary_min)}${job.salary_max ? ` - $${fmt(job.salary_max)}` : '+'}`
     : null
-  const roleIntel = job.role_intel as RoleIntel | null
+  const roleIntel: RoleIntel | null = localRoleIntel ?? (job.role_intel as RoleIntel | null)
+
+  async function enrichJob() {
+    setEnriching(true)
+    setEnrichError(null)
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/enrich`, { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Enrichment failed')
+      if (json.role_intel) setLocalRoleIntel(json.role_intel as RoleIntel)
+    } catch (err) {
+      setEnrichError((err as Error).message)
+    } finally {
+      setEnriching(false)
+    }
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -965,54 +1099,162 @@ export function JobDetailPane({
 
         {/* Company Intel tab */}
         {activeTab === 'company' && (
-          <CompanyIntelTab job={job} />
+          <CompanyIntelTab job={job} intelCache={intelCache} onIntelFetched={onIntelFetched} />
         )}
 
         {/* Job Details tab */}
         {activeTab === 'details' && <>
 
-        {/* Section 1: ABOUT THE ROLE */}
+        {/* Section 0: KEY FACTS STRIP — free fields extracted at pipeline time, no Claude needed */}
+        {(() => {
+          const salaryText   = job.salary_min
+            ? `$${fmt(job.salary_min)}${job.salary_max ? ` – $${fmt(job.salary_max)}` : '+'}`
+            : null
+          const salaryLevels = (job.salary_levels as Array<{ level: string; min: number; max: number }> | null) ?? null
+          const expText = job.experience_years_min != null
+            ? job.experience_years_max != null
+              ? `${job.experience_years_min}–${job.experience_years_max} yrs`
+              : `${job.experience_years_min}+ yrs`
+            : null
+          const deadline = (job.application_deadline as string | null) ?? null
+
+          const hasAnyFact = salaryText || salaryLevels || expText || deadline ||
+            job.work_mode || job.visa_sponsorship || job.security_clearance ||
+            job.tech_stack?.length || job.benefits_highlights?.length
+          if (!hasAnyFact) return null
+
+          return (
+            <div className="rounded-md border border-border bg-muted/30 divide-y divide-border/50 text-sm">
+
+              {/* Row 1: salary · experience · work mode */}
+              {(salaryText || salaryLevels || expText || (job.work_mode && job.work_mode !== 'unknown')) && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3 py-2.5">
+                  {salaryLevels ? (
+                    <span className="flex items-center gap-1.5 flex-wrap">
+                      <DollarSign className="h-3.5 w-3.5 text-green-600 dark:text-green-400 flex-shrink-0" />
+                      {salaryLevels.map((lvl, i) => (
+                        <span key={i} className="font-semibold text-green-700 dark:text-green-400">
+                          {lvl.level}: ${fmt(lvl.min)}–${fmt(lvl.max)}
+                        </span>
+                      ))}
+                    </span>
+                  ) : salaryText ? (
+                    <span className="flex items-center gap-1.5">
+                      <DollarSign className="h-3.5 w-3.5 text-green-600 dark:text-green-400 flex-shrink-0" />
+                      <span className="font-semibold text-green-700 dark:text-green-400">{salaryText}</span>
+                    </span>
+                  ) : null}
+                  {expText && (
+                    <span className="flex items-center gap-1.5 text-foreground">
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      {expText} exp.
+                    </span>
+                  )}
+                  {job.work_mode && job.work_mode !== 'unknown' && (
+                    <span className={`text-[11px] px-2 py-0.5 rounded font-medium ${
+                      job.work_mode === 'remote'  ? 'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300' :
+                      job.work_mode === 'hybrid'  ? 'bg-blue-100 text-blue-800 dark:bg-blue-500/15 dark:text-blue-300' :
+                      'bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300'
+                    }`}>
+                      {job.work_mode === 'remote' ? 'Fully remote' : job.work_mode === 'hybrid' ? 'Hybrid' : 'On-site'}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Row 2: visa · clearance · deadline */}
+              {((job.visa_sponsorship && job.visa_sponsorship !== 'unknown') ||
+                (job.security_clearance && job.security_clearance !== 'none') || deadline) && (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3 py-2.5">
+                  {job.visa_sponsorship === 'yes' && (
+                    <span className="flex items-center gap-1.5 text-blue-700 dark:text-blue-300">
+                      <GraduationCap className="h-3.5 w-3.5 flex-shrink-0" /> Visa sponsorship available
+                    </span>
+                  )}
+                  {job.visa_sponsorship === 'no' && (
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <GraduationCap className="h-3.5 w-3.5 flex-shrink-0" /> No visa sponsorship
+                    </span>
+                  )}
+                  {job.security_clearance === 'required' && (
+                    <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-300">
+                      <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" /> Clearance required
+                    </span>
+                  )}
+                  {job.security_clearance === 'preferred' && (
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" /> Clearance preferred
+                    </span>
+                  )}
+                  {deadline && (
+                    <span className="flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                      <CalendarClock className="h-3.5 w-3.5 flex-shrink-0" />
+                      Apply by {new Date(deadline + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Row 3: tech stack */}
+              {job.tech_stack && job.tech_stack.length > 0 && (
+                <div className="px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Tech stack</p>
+                  <div className="flex flex-wrap gap-1">
+                    {job.tech_stack.map((t, i) => (
+                      <span key={i} className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-foreground font-medium capitalize">{t}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Row 4: benefits */}
+              {job.benefits_highlights && job.benefits_highlights.length > 0 && (
+                <div className="px-3 py-2.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Benefits</p>
+                  <div className="flex flex-wrap gap-1">
+                    {job.benefits_highlights.map((b, i) => (
+                      <span key={i} className="text-[11px] px-1.5 py-0.5 rounded bg-muted text-foreground font-medium">{b}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
+        {/* Section 1: DESCRIPTION */}
         {(job.role_summary || job.description) && (
           <div>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">About the role</h3>
-
-            {job.role_summary && (
-              <p className="text-sm text-foreground leading-relaxed mb-2">{job.role_summary}</p>
-            )}
-
-            {/* Work mode pill */}
-            {job.work_mode && job.work_mode !== 'unknown' && (
-              <span className={`inline-block text-[11px] px-2 py-0.5 rounded font-medium mb-3 ${
-                job.work_mode === 'remote'  ? 'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300' :
-                job.work_mode === 'hybrid'  ? 'bg-blue-100 text-blue-800 dark:bg-blue-500/15 dark:text-blue-300' :
-                job.work_mode === 'on-site' ? 'bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-300' :
-                'bg-muted text-muted-foreground'
-              }`}>
-                {job.work_mode === 'remote' ? 'Fully remote' : job.work_mode === 'hybrid' ? 'Hybrid' : 'On-site'}
-              </span>
-            )}
-
-            {job.description && (
-              <div className="border border-border rounded-md overflow-hidden">
+            {/* Header row with font-size toggle */}
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Description</h3>
+              <div className="flex items-center gap-1">
+                <Type className="h-3 w-3 text-muted-foreground" />
                 <button
-                  onClick={() => setDescOpen(o => !o)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-                >
-                  <span>Full description</span>
-                  {descOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                </button>
-                {descOpen && (
-                  <div className="px-3 pb-4 pt-1 border-t border-border">
-                    {renderJobDescription(job.description)}
-                  </div>
-                )}
+                  onClick={() => setFontSizeIdx(i => Math.max(0, i - 1))}
+                  disabled={fontSizeIdx === 0}
+                  className="text-[10px] font-bold px-1 py-0.5 rounded hover:bg-muted disabled:opacity-30 text-muted-foreground"
+                  title="Smaller text"
+                >A-</button>
+                <button
+                  onClick={() => setFontSizeIdx(i => Math.min(FONT_SIZE_CLASSES.length - 1, i + 1))}
+                  disabled={fontSizeIdx === FONT_SIZE_CLASSES.length - 1}
+                  className="text-[13px] font-bold px-1 py-0.5 rounded hover:bg-muted disabled:opacity-30 text-muted-foreground"
+                  title="Larger text"
+                >A+</button>
               </div>
+            </div>
+            {job.role_summary && (
+              <p className={`${fontSize} text-foreground leading-relaxed mb-3 italic text-muted-foreground`}>{job.role_summary}</p>
+            )}
+            {job.description && (
+              <div>{renderJobDescription(job.description, fontSize)}</div>
             )}
           </div>
         )}
 
         {/* Section 2: JD INTELLIGENCE */}
-        {roleIntel && (
+        {(roleIntel || !job.enriched_at) && (
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -1033,7 +1275,7 @@ export function JobDetailPane({
               </button>
             </div>
 
-            {intelOpen && (
+            {intelOpen && roleIntel && (
               <JdIntelligenceSection
                 intel={roleIntel}
                 skillsRequired={job.skills_required ?? []}
@@ -1048,6 +1290,19 @@ export function JobDetailPane({
                 visaSponsorship={job.visa_sponsorship ?? null}
                 applicationDeadline={job.application_deadline ?? null}
               />
+            )}
+            {intelOpen && !roleIntel && (
+              <div className="rounded-md border border-dashed border-border px-3 py-5 text-center">
+                <p className="text-xs text-muted-foreground mb-3">
+                  Run AI enrichment to extract qualitative insights — red flags, prep tips, ATS keywords — not visible in the raw JD.
+                </p>
+                <Button size="sm" onClick={enrichJob} disabled={enriching} className="gap-1.5">
+                  {enriching
+                    ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Enriching…</>
+                    : <><Zap className="h-3.5 w-3.5" /> Enrich with AI</>}
+                </Button>
+                {enrichError && <p className="text-xs text-red-500 mt-2">{enrichError}</p>}
+              </div>
             )}
           </div>
         )}

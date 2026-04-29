@@ -26,6 +26,8 @@ export interface NormalizedJob {
   experience_years_max: number | null
   tech_stack:           string[]
   benefits_highlights:  string[]
+  application_deadline: string | null   // ISO date extracted from JD text (e.g. "2026-05-03")
+  salary_levels:        Array<{ level: string; min: number; max: number }> | null  // per-level bands (e.g. NVIDIA L5/L6)
   source: {
     name:          string
     url:           string
@@ -105,6 +107,8 @@ export function normalizeJob(raw: RawApifyJob, sourceName: string): NormalizedJo
     experience_years_max: extractExpMax(description),
     tech_stack:           extractTechStack(description),
     benefits_highlights:  extractBenefits(description),
+    application_deadline: extractDeadline(description),
+    salary_levels:        extractSalaryLevels(description),
     source: {
       name:          sourceName,
       url,
@@ -182,7 +186,7 @@ const COUNTRY_NAME_TO_CODE: Record<string, string> = {
  * Infer an ISO 3166-1 alpha-2 country code from a free-text location string.
  *
  * Resolution order:
- *   1. "Remote" variants                → "REMOTE"
+ *   1. "Remote" (standalone only — "Remote, Germany" falls through to country check) → "REMOTE"
  *   2. "Multiple Locations"             → "MULTI"
  *   3. Explicit ISO-2 code in string    → that code
  *   4. Known country name substring     → mapped code
@@ -194,8 +198,12 @@ export function inferCountryCode(location: string): string {
 
   const loc = location.toLowerCase().trim()
 
-  // Remote
-  if (/^remote$/.test(loc) || loc.includes('remote')) return 'REMOTE'
+  // Remote — only return REMOTE if "remote" is the entire string or the primary
+  // location with no country context. Compound strings like "Remote, Germany"
+  // should fall through to the country-name check so the country code wins.
+  if (/^remote$/.test(loc)) return 'REMOTE'
+  if (/^remote\s+(only|work|jobs?)$/.test(loc)) return 'REMOTE'
+  if (/^(fully |100%\s*)remote$/.test(loc)) return 'REMOTE'
 
   // Multiple locations
   if (/^\d+\s+locations?$/.test(loc) || loc === 'multiple locations') return 'MULTI'
@@ -454,6 +462,75 @@ export function extractBenefits(text: string): string[] {
     }
   }
   return results
+}
+
+/**
+ * Extract application deadline from description text.
+ * Looks for explicit "applications accepted until / closing date / deadline" phrases.
+ * Returns an ISO date string (YYYY-MM-DD) or null.
+ */
+export function extractDeadline(text: string): string | null {
+  if (!text) return null
+
+  // "Applications accepted at least until May 3, 2026" / "deadline: June 1, 2026"
+  const MONTHS: Record<string, string> = {
+    january: '01', february: '02', march: '03', april: '04',
+    may: '05', june: '06', july: '07', august: '08',
+    september: '09', october: '10', november: '11', december: '12',
+    jan: '01', feb: '02', mar: '03', apr: '04',
+    jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+  }
+
+  const pattern = /(?:applications?\s+(?:are\s+)?accepted\s+(?:at\s+least\s+)?until|closing\s+date[:\s]+|deadline[:\s]+|apply\s+by[:\s]+|application\s+deadline[:\s]+)\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i
+  const m = text.match(pattern)
+  if (m) {
+    const mo = MONTHS[m[1].toLowerCase()]
+    if (mo) {
+      const day = m[2].padStart(2, '0')
+      return `${m[3]}-${mo}-${day}`
+    }
+  }
+
+  // ISO date in deadline context: "deadline: 2026-05-03"
+  const iso = text.match(/(?:deadline|closing\s+date|apply\s+by)[:\s]+(\d{4}-\d{2}-\d{2})/i)
+  if (iso) return iso[1]
+
+  return null
+}
+
+/**
+ * Extract per-level salary bands for roles that post multiple compensation tiers
+ * (e.g. NVIDIA L5/L6, Google L4/L5).
+ * Returns null if only a single range is present (already stored in salary_min/max).
+ *
+ * Example match:
+ *   "L5: $196,000 – $310,500 / L6: $232,000 – $368,000"
+ *   "IC3 compensation range: $120k–$160k; IC4: $160k–$210k"
+ */
+export function extractSalaryLevels(text: string): Array<{ level: string; min: number; max: number }> | null {
+  if (!text) return null
+
+  // Pattern: Level label followed by a salary range
+  const LEVEL_RANGE =
+    /\b(L\d|IC\d|E\d|P\d|M\d|G\d{2}|Grade\s+\d+|Level\s+\d+|Senior|Staff|Principal)\b[^$\n]{0,40}\$\s*([\d,]+)\s*[kK]?\s*[-–—]\s*\$?\s*([\d,]+)\s*[kK]?/gi
+
+  const levels: Array<{ level: string; min: number; max: number }> = []
+  const seen = new Set<string>()
+  let m: RegExpExecArray | null
+
+  while ((m = LEVEL_RANGE.exec(text)) !== null) {
+    const label = m[1].trim()
+    if (seen.has(label)) continue
+    seen.add(label)
+
+    const raw1 = parseInt(m[2].replace(/,/g, ''), 10)
+    const raw2 = parseInt(m[3].replace(/,/g, ''), 10)
+    const min = raw1 < 1000 ? raw1 * 1000 : raw1
+    const max = raw2 < 1000 ? raw2 * 1000 : raw2
+    if (min >= 20_000 && max >= min) levels.push({ level: label, min, max })
+  }
+
+  return levels.length >= 2 ? levels : null
 }
 
 // ── Section-header regex shared by cleanDescription ───────────────────────────

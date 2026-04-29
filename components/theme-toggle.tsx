@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Sun, Moon, Monitor } from 'lucide-react'
 
@@ -13,9 +14,15 @@ const OPTIONS: Array<{ value: ThemeValue; Icon: typeof Sun; label: string }> = [
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme()
+  // Suppress hydration mismatch: next-themes can't resolve the theme on the
+  // server, so both SSR and the first client render show the same placeholder.
+  // After mount the real toggle fades in.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
-  // Reserve space pre-mount to avoid layout shift
-  if (!theme) return <div className="h-9" aria-hidden />
+  if (!mounted) {
+    return <div className="h-9" aria-hidden />
+  }
 
   return (
     <div

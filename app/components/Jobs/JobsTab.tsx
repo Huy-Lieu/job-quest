@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -9,6 +9,7 @@ import type { JobWithScore } from '@/lib/types'
 import { SOURCE_LABELS, AVAILABLE_SOURCES } from '@/app/dashboard/jobs/constants'
 import { JobListRow, JobDetailEmptyState } from '@/app/components/Jobs/JobListRow'
 import { JobDetailPane } from '@/app/components/Jobs/JobDetailPane'
+import type { FetchedIntel } from '@/app/components/Jobs/JobDetailPane'
 
 interface JobsTabProps {
   jobs:            JobWithScore[]
@@ -50,6 +51,12 @@ export function JobsTab({
 }: JobsTabProps) {
   const activeJob = activeJobId ? jobs.find((j) => j.id === activeJobId) ?? null : null
   const [listCollapsed, setListCollapsed] = useState(false)
+
+  // Company intel cache — keyed by job ID, persists across job selections this session
+  const [intelCache, setIntelCache] = useState<Map<string, FetchedIntel>>(new Map())
+  const handleIntelFetched = useCallback((jobId: string, intel: FetchedIntel) => {
+    setIntelCache(prev => new Map(prev).set(jobId, intel))
+  }, [])
 
   return (
     <div className="space-y-4">
@@ -161,7 +168,7 @@ export function JobsTab({
             {/* Right panel — job detail (full width when list collapsed) */}
             <div className="rounded-lg border overflow-hidden">
               {activeJob
-                ? <JobDetailPane job={activeJob} onDelete={deleteOne} />
+                ? <JobDetailPane job={activeJob} onDelete={deleteOne} intelCache={intelCache} onIntelFetched={handleIntelFetched} />
                 : <JobDetailEmptyState />
               }
             </div>
@@ -177,7 +184,7 @@ export function JobsTab({
           </div>
           {detailOpenMobile && activeJob && (
             <div className="lg:hidden fixed inset-0 bg-background z-50 overflow-hidden">
-              <JobDetailPane job={activeJob} onDelete={deleteOne} onClose={closeJobMobile} />
+              <JobDetailPane job={activeJob} onDelete={deleteOne} onClose={closeJobMobile} intelCache={intelCache} onIntelFetched={handleIntelFetched} />
             </div>
           )}
 

@@ -7,6 +7,7 @@ import {
   inferCountryCode, cleanDescription,
   extractVisa, extractClearance, extractWorkMode,
   extractExpMin, extractExpMax, extractTechStack, extractBenefits,
+  extractDeadline, extractSalaryLevels,
 } from '@/lib/pipeline/normalize'
 
 const HOURS_PER_YEAR = 2080 // 40 hrs/week × 52 weeks
@@ -184,6 +185,8 @@ export function normalizeSerpJob(raw: SerpJobResult): NormalizedJob {
     experience_years_max: extractExpMax(description),
     tech_stack:           extractTechStack(description),
     benefits_highlights:  extractBenefits(description),
+    application_deadline: extractDeadline(description),
+    salary_levels:        extractSalaryLevels(description),
     source: {
       name:          'serp',
       url,

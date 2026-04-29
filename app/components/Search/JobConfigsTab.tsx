@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Loader2, Play, Pencil, Copy, Trash2, MapPin, Building2, Clock, Settings2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type { SearchConfig } from '@/lib/types'
-import { NewConfigForm } from '@/app/components/Search/NewConfigForm'
+import { NewConfigForm }        from '@/app/components/Search/NewConfigForm'
+import { WorkdayRegistryPanel } from '@/app/components/Search/WorkdayRegistryPanel'
 import { SOURCE_LABELS, SOURCE_COLORS } from '@/app/dashboard/jobs/constants'
 
 interface JobConfigsTabProps {
@@ -37,7 +38,7 @@ export function JobConfigsTab({
 
       {loadingConfigs ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading configs…
+          <Loader2 className="h-4 w-4 animate-spin" /> Loading configs...
         </div>
       ) : configs.length === 0 ? (
         <Card className="border-dashed">
@@ -87,7 +88,7 @@ export function JobConfigsTab({
                     <Button size="sm" variant="outline" className="gap-1" disabled={runningConfigIds.has(config.id)}
                       onClick={() => runSearch(config.id, config.name ?? 'search', { switchToRunsTab: true })}>
                       {runningConfigIds.has(config.id)
-                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Running…</>
+                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Running...</>
                         : <><Play className="h-3.5 w-3.5" /> Run now</>}
                     </Button>
                     <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-foreground"
@@ -99,8 +100,7 @@ export function JobConfigsTab({
                       <Copy className="h-3.5 w-3.5" />
                     </Button>
                     <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-red-500"
-                      onClick={() => onDeleteConfig(config.id)}
-                      title="Delete" aria-label="Delete config">
+                      onClick={() => onDeleteConfig(config.id)} title="Delete" aria-label="Delete config">
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -110,9 +110,12 @@ export function JobConfigsTab({
           ))}
         </div>
       )}
+
       {editingConfig && (
         <NewConfigForm mode="edit" initialValues={editingConfig} onSaved={onConfigSaved} onClose={() => setEditingConfig(null)} />
       )}
+
+      <WorkdayRegistryPanel />
     </div>
   )
 }

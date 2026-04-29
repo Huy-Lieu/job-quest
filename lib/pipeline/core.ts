@@ -4,6 +4,7 @@
 // Stage order (cost-optimised — no Claude at search time):
 //   1. Scrape             — Apify + SerpAPI in parallel
 //   2. Normalize          — raw JSON → canonical schema
+//   2b.Title relevance    — drop jobs with no keyword tokens in title (free; exempts URL-targeted sources)
 //   3. Dedup early        — Stage 1+2: source ID + hash (free, DB only)
 //   4. Location filter    — drop jobs outside config.locations (free)
 //   5. Desc enrichment    — rag-web-browser for full JD text (Workday, SmartRecruiters, Workable, Recruitee)
@@ -33,6 +34,116 @@ export interface PipelineResult {
 }
 
 export type ProgressCallback = (stage: string, data: Record<string, unknown>) => void
+
+// ── Title relevance filter ────────────────────────────────────────────────────
+
+/**
+ * Generic job-title stop-words that are too broad to use as signal on their own.
+ * e.g. "engineer", "manager", "senior" appear in hundreds of unrelated roles.
+ * We only accept a keyword token as a match signal if it is NOT in this set.
+ */
+const TITLE_STOP_WORDS = new Set([
+  'engineer', 'senior', 'staff', 'principal', 'lead', 'junior', 'associate',
+  'manager', 'director', 'vp', 'head', 'specialist', 'analyst', 'consultant',
+  'developer', 'architect', 'scientist', 'researcher', 'intern', 'co-op',
+  'software', 'hardware', 'technical', 'technology', 'tech', 'it',
+  'and', 'or', 'the', 'of', 'in', 'for', 'at', 'a', 'an',
+])
+
+/**
+ * Extract meaningful tokens from a keyword phrase.
+ * Splits on whitespace/hyphens, lowercases, strips punctuation, drops stop-words.
+ * Returns tokens that are at least 2 characters long.
+ *
+ * Examples:
+ *   "embedded software engineer" → ["embedded"]
+ *   "FPGA RTL design"            → ["fpga", "rtl", "design"]
+ *   "machine learning"           → ["machine", "learning"]
+ */
+function extractKeywordTokens(phrase: string): string[] {
+  return phrase
+    .toLowerCase()
+    .split(/[\s\-\/,]+/)
+    .map(t => t.replace(/[^a-z0-9+#.]/g, ''))
+    .filter(t => t.length >= 2 && !TITLE_STOP_WORDS.has(t))
+}
+
+/**
+ * Filter jobs by title relevance against the search config keywords.
+ *
+ * A job passes if its canonical_title contains at least one meaningful token
+ * from any of the keyword phrases. Jobs from URL-targeted sources
+ * (greenhouse, lever, ashby, workday, career_page, phd) are exempt — those
+ * sources already scope results to the target company's board and the
+ * keyword is used as a search filter within that board.
+ *
+ * If no meaningful tokens can be extracted from any keyword (i.e. all tokens
+ * are stop words), the filter is skipped entirely to avoid blocking everything.
+ */
+function filterByTitleRelevance(
+  jobs:     NormalizedJob[],
+  keywords: string[],
+): NormalizedJob[] {
+  if (keywords.length === 0) return jobs
+
+  // URL-targeted sources already scope results — don't filter them by title
+  const URL_TARGETED_SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workday', 'career_page', 'phd', 'recruitee', 'teamtailor', 'personio', 'smartrecruiters', 'workable'])
+
+  // Build the token pool — all meaningful tokens from all keyword phrases
+  const tokenPool = new Set(keywords.flatMap(extractKeywordTokens))
+
+  if (tokenPool.size === 0) {
+    // All keywords are stop-words — can't filter, let everything through
+    console.log('[pipeline] title relevance filter: no usable tokens from keywords, skipping')
+    return jobs
+  }
+
+  const survived: NormalizedJob[] = []
+  const dropped:  NormalizedJob[] = []
+
+  for (const job of jobs) {
+    // Exempt URL-targeted sources
+    if (URL_TARGETED_SOURCES.has(job.source.name)) {
+      survived.push(job)
+      continue
+    }
+
+    const titleLower = (job.canonical_title ?? '').toLowerCase()
+
+    // Find the first matching token (for logging) and whether any matched
+    let matchedToken: string | null = null
+    for (const token of tokenPool) {
+      const escaped = token.replace(/[.+]/g, '\\$&')
+      if (new RegExp(`\\b${escaped}`, 'i').test(titleLower)) {
+        matchedToken = token
+        break
+      }
+    }
+
+    if (matchedToken !== null) {
+      survived.push(job)
+    } else {
+      dropped.push(job)
+      // Log every drop with the full token pool so you can see exactly why
+      console.log(
+        `[pipeline] title filter DROP: "${job.canonical_title}" @ ${job.company}` +
+        ` | source: ${job.source.name}` +
+        ` | tested tokens: [${[...tokenPool].join(', ')}]` +
+        ` | none matched title: "${titleLower}"`
+      )
+    }
+  }
+
+  console.log(
+    '[pipeline] title relevance filter:',
+    `tokens=[${[...tokenPool].join(', ')}]`,
+    `input=${jobs.length}`,
+    `survived=${survived.length}`,
+    `dropped=${dropped.length}`,
+  )
+
+  return survived
+}
 
 // ── Location filter ───────────────────────────────────────────────────────────
 
@@ -72,7 +183,10 @@ function filterByLocation(
   const survivors = jobs.filter(job => {
     const code = job.country_code ?? 'UNKNOWN'
     if (code === 'REMOTE' || code === 'MULTI') return true
-    if (code === 'UNKNOWN') return false
+    // UNKNOWN means the location string couldn't be parsed (e.g. "Bay Area", "Flexible",
+    // "Greater Seattle Area") — more likely a legitimate local posting than a foreign one,
+    // so pass it through rather than silently dropping it.
+    if (code === 'UNKNOWN') return true
     return targetCodes.has(code)
   })
 
@@ -131,10 +245,15 @@ export async function runPipelineCore(
 
   await notify('normalizing', { found: allNormalized.length })
 
+  // ── Stage 2b: Title relevance filter (free) ────────────────────────────────────────────
+  // Drop jobs whose titles share no meaningful tokens with the config keywords.
+  // URL-targeted sources (Greenhouse, Workday, etc.) are exempt.
+  const afterTitleFilter = filterByTitleRelevance(allNormalized, config.keywords)
+
   // ── Stage 3: Early dedup (Stage 1+2 — free) ────────────────────────────────
   await notify('deduplicating', { message: 'Checking for duplicates...' })
 
-  const afterEarlyDedup = await deduplicateEarly(allNormalized)
+  const afterEarlyDedup = await deduplicateEarly(afterTitleFilter)
 
   // ── Stage 4: Location filter (free) ────────────────────────────────────────
   const targetLocations = config.locations ?? []
@@ -143,11 +262,6 @@ export async function runPipelineCore(
   await notify('deduplicating', { survivors: afterLocationFilter.length })
 
   // ── Stage 5: Workday full description fetch ──────────────────────────────────
-  // Workday's CXS listing API only returns bullet fragments. For any Workday jobs
-  // that survived the location filter, fire Apify rag-web-browser against each
-  // apply URL to fetch the full rendered JD text. Runs sequentially (rag-web-browser
-  // uses 8192MB per request so parallel would exhaust Apify memory limits).
-  // Non-Workday jobs pass through unchanged.
   await notify('fetching_descriptions', { message: 'Fetching full job descriptions...' })
   const afterDescriptions = await enrichDescriptions(afterLocationFilter)
 
@@ -163,7 +277,7 @@ export async function runPipelineCore(
 
   await notify('deduplicating', { unique: uniqueJobs.length })
 
-  // ── Stage 6: Store ──────────────────────────────────────────────────────────
+  // ── Stage 7: Store ──────────────────────────────────────────────────────────
   await notify('storing', { message: 'Saving jobs...' })
 
   let insertedCount = 0

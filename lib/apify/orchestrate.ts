@@ -37,12 +37,33 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
   const keywords  = config.keywords
   const locations = config.locations ?? []
 
+  // Workday's searchText is plain-text, not Boolean — a long "A OR B OR C" string
+  // performs poorly. Use the single most specific keyword token instead (the first
+  // keyword after stripping generic stop-words), then rely on the title-relevance
+  // filter to drop off-topic results.
+  const WORKDAY_STOP = new Set(['engineer','senior','staff','principal','lead','junior',
+    'associate','manager','developer','architect','specialist','analyst','software','hardware'])
+  function bestWorkdayToken(kws: string[]): string {
+    for (const phrase of kws) {
+      const tokens = phrase.toLowerCase().split(/[\s\-\/,]+/)
+        .map(t => t.replace(/[^a-z0-9+#.]/g, ''))
+        .filter(t => t.length >= 2 && !WORKDAY_STOP.has(t))
+      if (tokens.length > 0) return tokens[0]
+    }
+    return kws[0] ?? ''
+  }
+  const workdayQuery = bestWorkdayToken(keywords)
+  console.log(`[apify/orchestrate] Workday query: "${workdayQuery}" (from keywords: [${keywords.join(', ')}])`)
+
   // Pre-resolve URL-targeted source options once, shared across relevant sources
-  const atsSlugs       = resolveAtsSlugs(config.career_page_urls ?? [], config.target_companies)
-  const workdayTenants = resolveWorkdayTenants(config.career_page_urls ?? [], config.target_companies)
-  const careerPageUrls = config.career_page_urls?.length
-    ? config.career_page_urls
-    : getKnownCareerUrls(config.target_companies)
+  console.log(`[apify/orchestrate] target_companies: ${JSON.stringify(config.target_companies)}`)
+  console.log(`[apify/orchestrate] workday_disabled: ${JSON.stringify(config.workday_disabled)}`)
+  const atsSlugs       = resolveAtsSlugs([], config.target_companies)
+  const disabled       = new Set((config.workday_disabled ?? []).map(t => t.toLowerCase()))
+  const workdayTenants = resolveWorkdayTenants([], config.target_companies)
+    .filter(t => !disabled.has(t.tenant.toLowerCase()))
+  console.log(`[apify/orchestrate] resolved workday tenants: ${JSON.stringify(workdayTenants)}`)
+  const careerPageUrls = getKnownCareerUrls(config.target_companies)
 
   // Build per-source options so each buildInput() gets the right targetUrls
   function optionsFor(sourceName: string) {
@@ -71,14 +92,17 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
   }
 
   // Fire all actor runs in parallel.
-  // Workday bypasses the generic Apify RAG-browser actor and uses the direct
-  // Workday JSON API (fetchWorkdayBoard) which returns structured {title, company, ...}
-  // fields that the normalizer can parse. The RAG-browser returns markdown blobs
-  // with no structured fields, causing 0 jobs to survive the normalizer filter.
+  // Workday uses shahidirfan/Workday-Job-Scraper (no proxy needed, handles CXS auth internally).
+  // All tenant career page URLs are batched into a single actor run.
   const settled = await Promise.allSettled(
     enabledSources.map(source => {
       if (source.name === 'workday') {
-        return runWorkdayBoards(workdayTenants, query)
+        if (workdayTenants.length === 0) {
+          console.log('[apify/orchestrate] Workday: no tenants resolved — add target companies or leave blank for all')
+          return Promise.resolve({ source: source.label, items: [] as RawApifyJob[] })
+        }
+        console.log(`[apify/orchestrate] Workday: querying ${workdayTenants.length} tenant(s) via shahidirfan/Workday-Job-Scraper`)
+        return runWorkdayBoards(workdayTenants, workdayQuery, 50)
           .then(items => ({ source: source.label, items }))
       }
       const input = source.buildInput(keywords, locations, optionsFor(source.name))
@@ -121,11 +145,11 @@ export async function runFullSearch(config: SearchConfig): Promise<Record<string
   const keywords  = config.keywords
   const locations = config.locations ?? []
 
-  const atsSlugs       = resolveAtsSlugs(config.career_page_urls ?? [], config.target_companies)
-  const workdayTenants = resolveWorkdayTenants(config.career_page_urls ?? [], config.target_companies)
-  const careerPageUrls = config.career_page_urls?.length
-    ? config.career_page_urls
-    : getKnownCareerUrls(config.target_companies)
+  const atsSlugs       = resolveAtsSlugs([], config.target_companies)
+  const _disabled      = new Set((config.workday_disabled ?? []).map(t => t.toLowerCase()))
+  const workdayTenants = resolveWorkdayTenants([], config.target_companies)
+    .filter(t => !_disabled.has(t.tenant.toLowerCase()))
+  const careerPageUrls = getKnownCareerUrls(config.target_companies)
 
   function optionsFor(sourceName: string) {
     switch (sourceName) {
@@ -205,12 +229,38 @@ async function runAtsBoards(
   return settled.flatMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
 }
 
-/** Fan out Workday fetches across tenants; each tenant is {tenant, dc, site}. */
+/**
+ * Run all Workday tenants in a single shahidirfan/Workday-Job-Scraper actor call.
+ * Maps the actor's output fields to our RawApifyJob schema.
+ */
 async function runWorkdayBoards(
   tenants: WorkdayTenant[],
-  query:   string
+  query:   string,
+  limit:   number = 50,
 ): Promise<RawApifyJob[]> {
   if (tenants.length === 0) return []
-  const settled = await Promise.allSettled(tenants.map(t => sources.fetchWorkdayBoard(t, query)))
-  return settled.flatMap(r => r.status === 'fulfilled' ? (r.value as RawApifyJob[]) : [])
+
+  const startUrls = tenants.map(t => ({
+    url: `https://${t.tenant}.${t.dc}.myworkdayjobs.com/${t.site}`,
+  }))
+
+  const raw = await runApifyActor('shahidirfan/Workday-Job-Scraper', {
+    startUrls,
+    results_wanted: limit * tenants.length,
+    max_pages:      5,
+    proxyConfiguration: { useApifyProxy: false },
+  })
+
+  // Map actor output fields → RawApifyJob (normalizer-compatible)
+  return raw
+    .filter((r: RawApifyJob) => r.type !== 'job_workday_blocked' && r.title)
+    .map((r: RawApifyJob) => ({
+      title:         r.title,
+      company:       r.company ?? r.hiring_org ?? '',
+      location:      r.locations ?? r.city ?? 'Unknown',
+      url:           r.apply_url ?? r.job_url ?? '',
+      description:   r.description_text ?? r.description_html ?? '',
+      postedAt:      r.posted_at ?? null,
+      source_job_id: r.requisition_id ?? r.external_path ?? null,
+    }))
 }

@@ -199,7 +199,7 @@ export default function JobsPage() {
     const res = await fetch('/api/search/configs', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: `${base} (copy)`, keywords: c.keywords, target_companies: c.target_companies,
-        locations: c.locations, sources: c.sources, career_page_urls: c.career_page_urls, schedule_interval: c.schedule_interval }),
+        locations: c.locations, sources: c.sources, workday_disabled: c.workday_disabled ?? [], schedule_interval: c.schedule_interval }),
     })
     if (res.ok) { const newCfg = await res.json(); setConfigs((p) => [newCfg, ...p]); toast.success(`Duplicated "${base}"`) }
     else { const d = await res.json().catch(() => ({})); toast.error(`Duplicate failed: ${(d as { error?: string }).error ?? res.statusText}`) }

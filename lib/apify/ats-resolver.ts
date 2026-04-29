@@ -96,30 +96,68 @@ export function resolveAtsSlugs(careerUrls: string[], targetCompanies: string[])
 
 /** Known Workday tenants for common target companies (used when career_page_urls don't supply one). */
 export const KNOWN_WORKDAY: Record<string, WorkdayTenant> = {
+  // Semiconductors / EDA
   qualcomm:              { tenant: 'qualcomm',              dc: 'wd5', site: 'External' },
   intel:                 { tenant: 'intel',                 dc: 'wd1', site: 'External' },
+  nvidia:                { tenant: 'nvidia',                dc: 'wd5', site: 'NVIDIAExternalCareerSite' },
+  amd:                   { tenant: 'amd',                   dc: 'wd1', site: 'AMD' },
   synopsys:              { tenant: 'synopsys',              dc: 'wd1', site: 'Synopsys_Careers' },
+  cadence:               { tenant: 'cadence',               dc: 'wd1', site: 'External_Careers' },
   infineon:              { tenant: 'infineon',              dc: 'wd3', site: 'Infineon' },
   stmicroelectronics:    { tenant: 'stmicroelectronics',    dc: 'wd3', site: 'STMicroelectronics_Careers' },
   nxp:                   { tenant: 'nxp',                   dc: 'wd1', site: 'nxp_External_Careers' },
   broadcom:              { tenant: 'broadcom',              dc: 'wd1', site: 'External_Career_Site' },
-  leidos:                { tenant: 'leidos',                dc: 'wd5', site: 'External' },
+  marvell:               { tenant: 'marvell',               dc: 'wd5', site: 'External' },
+  microchip:             { tenant: 'microchiptechnology',   dc: 'wd1', site: 'External' },
+  onsemi:                { tenant: 'onsemi',                dc: 'wd1', site: 'ext' },
+  texasinstruments:      { tenant: 'texasinstruments',      dc: 'wd5', site: 'TICareerSite' },
+  // Automotive OEMs
+  ford:                  { tenant: 'ford',                  dc: 'wd10', site: 'Ford_Motor_Company_External' },
+  gm:                    { tenant: 'generalmotors',         dc: 'wd5',  site: 'Careers' },
+  'general motors':      { tenant: 'generalmotors',         dc: 'wd5',  site: 'Careers' },
+  stellantis:            { tenant: 'stellantis',            dc: 'wd3',  site: 'Stellantis' },
+  toyota:                { tenant: 'toyota',                dc: 'wd5',  site: 'TMNA_External' },
+  honda:                 { tenant: 'honda',                 dc: 'wd5',  site: 'HondaExternalJobBoard' },
+  // Automotive Tier-1 suppliers
+  continental:           { tenant: 'continental',           dc: 'wd3',  site: 'ContiCareer' },
+  aptiv:                 { tenant: 'aptiv',                 dc: 'wd5',  site: 'External' },
+  denso:                 { tenant: 'denso',                 dc: 'wd5',  site: 'DENSO_External' },
+  magna:                 { tenant: 'magna',                 dc: 'wd3',  site: 'Magna' },
+  borgwarner:            { tenant: 'borgwarner',            dc: 'wd5',  site: 'External' },
+  visteon:               { tenant: 'visteon',               dc: 'wd5',  site: 'External' },
+  harman:                { tenant: 'harman',                dc: 'wd5',  site: 'Samsung_Harman_External' },
+  bosch:                 { tenant: 'bosch',                 dc: 'wd3',  site: 'Bosch_Extern' },
+  valeo:                 { tenant: 'valeo',                 dc: 'wd3',  site: 'valeo_external' },
+  forvia:                { tenant: 'forvia',                dc: 'wd3',  site: 'FORVIA_External' },
+  // Autonomous / AV
+  waymo:                 { tenant: 'waymo',                 dc: 'wd5',  site: 'waymo' },
+  mobileye:              { tenant: 'mobileye',              dc: 'wd3',  site: 'Mobileye_External_Career_Site' },
+  // Defense / Aerospace
+  leidos:                { tenant: 'leidos',                dc: 'wd5',  site: 'External' },
+  l3harris:              { tenant: 'l3harris',              dc: 'wd5',  site: 'External' },
+  northropgrumman:       { tenant: 'northropgrumman',       dc: 'wd5',  site: 'Northrop_Grumman_External_Site' },
+  'northrop grumman':    { tenant: 'northropgrumman',       dc: 'wd5',  site: 'Northrop_Grumman_External_Site' },
+  rtx:                   { tenant: 'rtx',                   dc: 'wd5',  site: 'ExternalCareerSite' },
+  raytheon:              { tenant: 'rtx',                   dc: 'wd5',  site: 'ExternalCareerSite' },
+  baesystems:            { tenant: 'baesystems',            dc: 'wd5',  site: 'External_Career_Site' },
+  'bae systems':         { tenant: 'baesystems',            dc: 'wd5',  site: 'External_Career_Site' },
 }
 
-export function resolveWorkdayTenants(careerUrls: string[], targetCompanies: string[]): WorkdayTenant[] {
-  const out = new Map<string, WorkdayTenant>()
-
-  for (const url of careerUrls) {
-    const m = url.match(/https?:\/\/([^.]+)\.(wd\d+)\.myworkdayjobs\.com\/(?:en-US\/|wday\/cxs\/[^/]+\/)?([^/?#]+)/i)
-    if (m) {
-      const [, tenant, dc, site] = m
-      out.set(tenant + '/' + site, { tenant, dc, site })
+export function resolveWorkdayTenants(_careerUrls: string[], targetCompanies: string[]): WorkdayTenant[] {
+  // "Leave blank to search all" — return every known tenant when no companies specified
+  if (!targetCompanies || targetCompanies.length === 0) {
+    const seen = new Map<string, WorkdayTenant>()
+    for (const t of Object.values(KNOWN_WORKDAY)) {
+      seen.set(t.tenant + '/' + t.site, t)
     }
+    return [...seen.values()]
   }
 
+  const out = new Map<string, WorkdayTenant>()
   for (const c of targetCompanies) {
-    const key   = c.toLowerCase().trim().replace(/\s+/g, '')
-    const known = KNOWN_WORKDAY[key]
+    const keySpaced   = c.toLowerCase().trim()           // "general motors", "bosch"
+    const keyStripped = keySpaced.replace(/\s+/g, '')    // "generalmotors", "bosch"
+    const known = KNOWN_WORKDAY[keySpaced] ?? KNOWN_WORKDAY[keyStripped]
     if (known) out.set(known.tenant + '/' + known.site, known)
   }
 

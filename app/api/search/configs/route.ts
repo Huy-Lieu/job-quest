@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(request.url)
-  const scope = searchParams.get('scope')   // 'jobs' | 'phd' | null
+  const scope = searchParams.get('scope')
 
   const { data, error } = await supabaseAdmin
     .from('search_configs')
@@ -23,7 +23,6 @@ export async function GET(request: Request) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  // A config is "PhD" iff its sources include 'phd'. Filter accordingly.
   const filtered = (data ?? []).filter((c) => {
     const isPhd = Array.isArray(c.sources) && c.sources.includes('phd')
     if (scope === 'jobs') return !isPhd
@@ -41,14 +40,14 @@ export async function POST(request: Request) {
   const body = await request.json()
   const {
     name,
-    keywords         = [],
-    target_companies = [],
-    locations        = ['United States'],
-    sources          = ['linkedin', 'indeed', 'google'],
-    career_page_urls = [],
+    keywords          = [],
+    target_companies  = [],
+    locations         = ['United States'],
+    sources           = ['linkedin', 'indeed', 'google'],
+    workday_disabled  = [],
     schedule_interval = 'daily',
-    serp_enabled = false,
-    serp_query   = null,
+    serp_enabled      = false,
+    serp_query        = null,
   } = body
 
   if (!keywords.length) {
@@ -64,7 +63,7 @@ export async function POST(request: Request) {
       target_companies,
       locations,
       sources,
-      career_page_urls,
+      workday_disabled,
       serp_enabled,
       serp_query:        serp_query ? String(serp_query).trim() : null,
       schedule_interval,
@@ -84,10 +83,9 @@ export async function PATCH(request: Request) {
   const { id, ...rest } = body as Record<string, unknown> & { id?: string }
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
 
-  // Whitelist editable fields — prevents clients from overriding user_id, id, timestamps, etc.
   const ALLOWED = [
     'name', 'keywords', 'target_companies', 'locations',
-    'sources', 'career_page_urls', 'serp_enabled', 'serp_query', 'schedule_interval',
+    'sources', 'workday_disabled', 'serp_enabled', 'serp_query', 'schedule_interval',
   ] as const
   const patch: Record<string, unknown> = Object.fromEntries(
     Object.entries(rest).filter(([k]) => (ALLOWED as readonly string[]).includes(k))
@@ -118,7 +116,6 @@ export async function DELETE(request: Request) {
   const id = searchParams.get('id')
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
 
-  // Soft-delete: flip is_active to false
   const { error } = await supabaseAdmin
     .from('search_configs')
     .update({ is_active: false })

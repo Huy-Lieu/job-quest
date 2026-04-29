@@ -228,19 +228,31 @@ export async function fetchWorkdayBoard(
   query: string,
   limit = 20
 ): Promise<Record<string, unknown>[]> {
+  const label = `${t.tenant}/${t.site} (${t.dc})`
   try {
     const base = `https://${t.tenant}.${t.dc}.myworkdayjobs.com`
+    const apiUrl = `${base}/wday/cxs/${t.tenant}/${t.site}/jobs`
+    console.log(`[workday] → POST ${apiUrl} query="${query}" limit=${limit}`)
     const res = await fetch(
-      `${base}/wday/cxs/${t.tenant}/${t.site}/jobs`,
+      apiUrl,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ appliedFacets: {}, limit, offset: 0, searchText: query }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ appliedFacets: [], limit, offset: 0, searchText: query }),
       }
     )
-    if (!res.ok) return []
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '')
+      console.warn(`[workday] ✗ ${label} — HTTP ${res.status} ${res.statusText} | body: ${errBody.slice(0, 300)}`)
+      return []
+    }
+    console.log(`[workday] ✓ ${label} — HTTP ${res.status}`)
     const body = await res.json()
     const postings = (body.jobPostings ?? []) as WorkdayJob[]
+    console.log(`[workday] ${label} — ${postings.length} posting(s) returned`)
     if (postings.length === 0) return []
 
     return postings.map(j => {
@@ -267,7 +279,8 @@ export async function fetchWorkdayBoard(
         source_job_id: j.externalPath ?? null,
       }
     })
-  } catch {
+  } catch (err) {
+    console.error(`[workday] ✗ ${label} — exception: ${err instanceof Error ? err.message : String(err)}`)
     return []
   }
 }

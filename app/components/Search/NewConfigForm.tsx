@@ -1,16 +1,16 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, Plus } from 'lucide-react'
 import type { SearchConfig, SearchSourceName, ScheduleInterval } from '@/lib/types'
 import {
   AVAILABLE_SOURCES, SOURCE_LABELS, SOURCE_NOTICES, NOTICE_TONE_STYLES,
 } from '@/app/dashboard/jobs/constants'
+import { KNOWN_WORKDAY } from '@/lib/apify/ats-resolver'
 
 interface ConfigFormProps {
   onCreated?:     (c: SearchConfig) => void
@@ -27,13 +27,32 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
   const [keywords, setKeywords]   = useState((initialValues?.keywords ?? []).join(', '))
   const [companies, setCompanies] = useState((initialValues?.target_companies ?? []).join(', '))
   const [locations, setLocations] = useState((initialValues?.locations ?? ['United States']).join(', '))
-  const [sources, setSources]     = useState<SearchSourceName[]>(initialValues?.sources ?? [...AVAILABLE_SOURCES])
-  const [schedule, setSchedule]   = useState<ScheduleInterval>(initialValues?.schedule_interval ?? 'daily')
-  const [careerPageUrls, setCareerPageUrls] = useState((initialValues?.career_page_urls ?? []).join('\n'))
-  const [serpEnabled, setSerpEnabled]       = useState(initialValues?.serp_enabled ?? false)
-  const [serpQuery,   setSerpQuery]         = useState(initialValues?.serp_query ?? '')
-  const [saving, setSaving]       = useState(false)
-  const [error, setError]         = useState('')
+  const [sources, setSources]           = useState<SearchSourceName[]>(initialValues?.sources ?? [...AVAILABLE_SOURCES])
+  const [schedule, setSchedule]         = useState<ScheduleInterval>(initialValues?.schedule_interval ?? 'daily')
+  const [workdayDisabled, setWorkdayDisabled] = useState<string[]>(initialValues?.workday_disabled ?? [])
+  const [serpEnabled, setSerpEnabled]   = useState(initialValues?.serp_enabled ?? false)
+  const [serpQuery,   setSerpQuery]     = useState(initialValues?.serp_query ?? '')
+  const [saving, setSaving]             = useState(false)
+  const [error, setError]               = useState('')
+
+  const matchedWorkdayTenants = useMemo(() => {
+    const parsed = companies.split(',').map(c => c.trim()).filter(Boolean)
+    // blank = "search all" — show every registry tenant (deduplicated)
+    if (parsed.length === 0) {
+      const seen = new Map<string, { key: string; tenant: string; dc: string; site: string }>()
+      for (const [k, t] of Object.entries(KNOWN_WORKDAY)) {
+        const dedupeKey = t.tenant + '/' + t.site
+        if (!seen.has(dedupeKey)) seen.set(dedupeKey, { key: k, ...t })
+      }
+      return [...seen.values()]
+    }
+    return parsed.flatMap(c => {
+      const keySpaced   = c.toLowerCase()
+      const keyStripped = keySpaced.replace(/\s+/g, '')
+      const t = KNOWN_WORKDAY[keySpaced] ?? KNOWN_WORKDAY[keyStripped]
+      return t ? [{ key: keyStripped, ...t }] : []
+    })
+  }, [companies])
 
   function toggleSource(s: SearchSourceName) {
     setSources((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s])
@@ -41,34 +60,31 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
 
   function resetCreateFields() {
     setName(''); setKeywords(''); setCompanies(''); setLocations('United States')
-    setSources([...AVAILABLE_SOURCES]); setSchedule('daily'); setCareerPageUrls(''); setSerpEnabled(false); setSerpQuery('')
+    setSources([...AVAILABLE_SOURCES]); setSchedule('daily')
+    setWorkdayDisabled([]); setSerpEnabled(false); setSerpQuery('')
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setSaving(true); setError('')
-
     const payload = {
       name:              name.trim() || null,
       keywords:          keywords.split(',').map((k) => k.trim()).filter(Boolean),
       target_companies:  companies.split(',').map((c) => c.trim()).filter(Boolean),
       locations:         locations.split(',').map((l) => l.trim()).filter(Boolean),
       sources,
-      career_page_urls:  careerPageUrls.split('\n').map((u) => u.trim()).filter(Boolean),
+      workday_disabled:  workdayDisabled,
       serp_enabled:      serpEnabled,
       serp_query:        serpQuery.trim() || null,
       schedule_interval: schedule,
     }
-
     const res  = await fetch('/api/search/configs', {
       method:  isEdit ? 'PATCH' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(isEdit ? { id: initialValues!.id, ...payload } : payload),
     })
     const data = await res.json()
-
     if (!res.ok) { setError(data.error ?? 'Failed to save config'); setSaving(false); return }
-
     setSaving(false)
     if (isEdit) { onSaved?.(data); onClose?.() }
     else        { onCreated?.(data); setOpen(false); resetCreateFields() }
@@ -100,17 +116,55 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
         <Input placeholder="United States, Remote" value={locations} onChange={(e) => setLocations(e.target.value)} />
       </div>
 
-      <div className="space-y-1">
-        <label className="text-sm font-medium">Career Page URLs</label>
-        <Textarea
-          placeholder={'https://stripe.com/jobs\nhttps://notion.so/careers'}
-          value={careerPageUrls}
-          onChange={(e) => setCareerPageUrls(e.target.value)}
-          rows={3}
-          className="font-mono text-xs"
-        />
-        <p className="text-xs text-muted-foreground">One URL per line — scrapes directly from company career pages</p>
-      </div>
+      {sources.includes('workday') && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">Workday tenants</label>
+            <span className="text-xs text-muted-foreground">
+              {companies.trim()
+                ? matchedWorkdayTenants.length === 0
+                  ? 'No matches in registry'
+                  : `${matchedWorkdayTenants.filter(t => !workdayDisabled.includes(t.tenant)).length} / ${matchedWorkdayTenants.length} active`
+                : `All ${matchedWorkdayTenants.length} registry tenants`}
+            </span>
+          </div>
+          {companies.trim() && matchedWorkdayTenants.length === 0 ? (
+            <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
+              No registry matches — company not listed? Add it in the Workday registry panel below.
+            </p>
+          ) : (
+            <div className="border rounded-md divide-y text-sm max-h-48 overflow-y-auto">
+              {matchedWorkdayTenants.map((t) => {
+                const isOff = workdayDisabled.includes(t.tenant)
+                return (
+                  <div key={t.key} className="flex items-center gap-3 px-3 py-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!isOff}
+                      onClick={() => setWorkdayDisabled(prev =>
+                        isOff ? prev.filter(x => x !== t.tenant) : [...prev, t.tenant]
+                      )}
+                      className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none ${isOff ? 'bg-muted' : 'bg-emerald-500'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${isOff ? 'translate-x-0' : 'translate-x-4'}`} />
+                    </button>
+                    <div className={`flex-1 min-w-0 ${isOff ? 'opacity-40' : ''}`}>
+                      <span className="font-medium capitalize">{t.key}</span>
+                      <span className="ml-2 font-mono text-xs text-muted-foreground">
+                        {t.tenant} · {t.dc} · {t.site}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Company not listed? Add it to the Workday registry in the panel below the config list.
+          </p>
+        </div>
+      )}
 
       <label className="flex items-center gap-2 text-sm cursor-pointer">
         <input type="checkbox" checked={serpEnabled} onChange={(e) => setSerpEnabled(e.target.checked)} className="rounded" />
@@ -120,9 +174,7 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
 
       {serpEnabled && (
         <div className="space-y-1 pl-6 border-l-2 border-blue-200 dark:border-blue-800">
-          <label className="text-sm font-medium">
-            Google Jobs query <span className="text-red-500">*</span>
-          </label>
+          <label className="text-sm font-medium">Google Jobs query <span className="text-red-500">*</span></label>
           <Input
             placeholder="e.g. Embedded Test Engineer"
             value={serpQuery}
@@ -130,9 +182,9 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
             className={serpEnabled && !serpQuery.trim() ? 'border-red-400' : ''}
           />
           <div className="text-xs text-muted-foreground space-y-0.5">
-            <p>Use <strong>3–5 words separated by spaces</strong> — treated as a Google search phrase.</p>
-            <p>✓ <span className="text-foreground">Embedded Test Engineer</span> — good, concise</p>
-            <p>✗ <span className="text-foreground">embedded, test, verification, FPGA</span> — commas cause 503 errors</p>
+            <p>Use <strong>3-5 words separated by spaces</strong> — treated as a Google search phrase.</p>
+            <p>Good: <span className="text-foreground">Embedded Test Engineer</span></p>
+            <p>Bad: <span className="text-foreground">embedded, test, verification, FPGA</span> — commas cause 503 errors</p>
           </div>
         </div>
       )}
@@ -186,7 +238,7 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
 
       <div className="flex gap-2">
         <Button type="submit" disabled={saving || !keywords.trim() || (serpEnabled && !serpQuery.trim())} className="gap-1">
-          {saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving…</> : isEdit ? 'Save changes' : 'Save Config'}
+          {saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving...</> : isEdit ? 'Save changes' : 'Save Config'}
         </Button>
         <Button type="button" variant="outline" onClick={() => (isEdit ? onClose?.() : setOpen(false))}>
           Cancel

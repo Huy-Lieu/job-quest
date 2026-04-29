@@ -263,7 +263,8 @@ export interface SearchConfig {
   target_companies:  string[]
   locations:         string[]
   sources:           SearchSourceName[]
-  career_page_urls:  string[]
+  /** Tenant names (keys in KNOWN_WORKDAY) that are toggled OFF for this config. */
+  workday_disabled:  string[]
   schedule_interval: ScheduleInterval
   last_run_at:       string | null
   is_active:         boolean
