@@ -1,9 +1,7 @@
 // app/api/search/run/route.ts
-// Cron-triggered job search pipeline — same logic as the SSE stream route but
-// no streaming. Called by Vercel Cron at 07:00 UTC daily via vercel.json.
-//
-// Auth: Authorization: Bearer CRON_SECRET (not session-based)
-// Runs the full pipeline sequentially for every due active search config.
+// Non-streaming search pipeline — same core as SSE (`runPipelineCore`) without events.
+// Auth: Authorization: Bearer CRON_SECRET (internal / scheduled callers). Not session-based.
+// May be invoked by cron scaffolding or ops; primary user flow is POST /api/search/stream from the UI.
 
 import { NextResponse }  from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'

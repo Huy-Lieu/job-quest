@@ -131,7 +131,11 @@ async function scoreBatch(batch: EnrichedJob[], resume: ResumeData): Promise<Job
 
   return parsed
     .sort((a, b) => a.index - b.index)
-    .map(({ index: _index, ...score }) => score as JobScore)
+    .map((item) => {
+      const score = { ...item } as Partial<JobScore> & { index?: number }
+      delete score.index
+      return score as JobScore
+    })
 }
 
 async function scoreJobsOneByOne(jobs: EnrichedJob[], resume: ResumeData): Promise<JobScore[]> {

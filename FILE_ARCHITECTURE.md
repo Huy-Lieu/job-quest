@@ -14,23 +14,21 @@ preventing silent truncation bugs when AI tools read or write them.
 | File | Lines | Responsibility |
 |------|-------|----------------|
 | `app/api/search/stream/route.ts` | ~180 | SSE wrapper only: auth, search_runs lifecycle, SSE emission, cancellation |
-| `lib/pipeline/core.ts` | ~360 | Full shared pipeline (all 8 stages); used by SSE route + cron runner |
-| `lib/search/run-pipeline.ts` | ~65 | Cron wrapper: calls `runPipelineCore`, owns search_runs DB lifecycle |
+| `lib/pipeline/core.ts` | ~360 | Full shared pipeline; used by SSE route + `run-pipeline` helper |
+| `lib/search/run-pipeline.ts` | ~65 | Non-SSE wrapper: calls `runPipelineCore`, owns `search_runs` DB lifecycle |
 
 **Key exports:**
 - `core.ts` → `runPipelineCore(config, userId, onProgress?): Promise<PipelineResult>`
 - `route.ts` → `GET`, `POST`, `DELETE` (Next.js Route Handlers)
 
-**Pipeline stage order (in `core.ts`):**
+**Pipeline stage order (in `core.ts`) — all free, no Claude at search time:**
 1. Scrape — Apify + SerpAPI in parallel
 2. Normalize — raw JSON → canonical schema with `country_code`
-3. Early dedup — source job ID + SHA-256 hash (free, DB only)
-4. Location filter — ISO country code exact match (free)
-5a. Workday description fetch — Apify RAG browser, sequential, max 5/run
-5b. Haiku enrich — 10 jobs/call (paid, survivors only)
-6. Fuzzy dedup — Haiku YES/NO (paid, needs enriched data)
-7. Sonnet score — 5 jobs/call (paid, final unique jobs only)
-8. Store — jobs + job_sources + job_scores → Supabase
+3. Early dedup — source job ID + content hash (DB)
+4. Location filter — ISO country code match; REMOTE/MULTI pass-through
+5. Description fetch — rag-web-browser for weak ATS listings (Workday, SmartRecruiters, Workable, Recruitee), batches of 3
+6. Fuzzy dedup — free title-similarity (no Claude)
+7. Store — `jobs` + `job_sources` → Supabase (LLM enrichment fields not filled at search time)
 
 ---
 
@@ -48,7 +46,7 @@ preventing silent truncation bugs when AI tools read or write them.
 | `app/components/Search/RunsTab.tsx` | 76 | Runs history tab (list of past search runs) |
 | `app/components/Jobs/JobCard.tsx` | 207 | Card-style job display (mobile / non-table view) |
 | `app/components/Jobs/JobTableRow.tsx` | 262 | Desktop table row: fmt, TABLE_COLS, TypePill, WorkModePill, SponsorPill, SkillChips, JobsHeader, JobRowDesktop |
-| `app/components/Jobs/JobListRow.tsx` | 292 | Split-view components: JobListRow (left pane), JobDetailPane (right pane), JobDetailEmptyState |
+| `app/components/Jobs/JobListRow.tsx` | ~120 | Split-view list row + `JobDetailEmptyState`; detail pane lives in `JobDetailPane.tsx` |
 | `app/dashboard/jobs/page.tsx` | 514 | State management, fetch helpers, SSE run/stop logic, layout only |
 
 **Import paths** (use `@/app/...` prefix for files under `app/`):
@@ -59,22 +57,19 @@ import { NewConfigForm }      from '@/app/components/Search/NewConfigForm'
 import { RunsTab }            from '@/app/components/Search/RunsTab'
 import { JobCard }            from '@/app/components/Jobs/JobCard'
 import { JobRowDesktop, ... } from '@/app/components/Jobs/JobTableRow'
-import { JobListRow, JobDetailPane, JobDetailEmptyState } from '@/app/components/Jobs/JobListRow'
+import { JobListRow, JobDetailEmptyState } from '@/app/components/Jobs/JobListRow'
+import { JobDetailPane } from '@/app/components/Jobs/JobDetailPane'
 ```
 
 ---
 
-## Split 3 — Job Detail Panel (`app/components/JobBoard/JobDetailPanel.tsx`)
+## Split 3 — Job detail pane (canonical: `app/components/Jobs/JobDetailPane.tsx`)
 
-**Original:** 409 lines (had 142 lines of locally-duplicated constants)
+**Note:** An older duplicate lived under `app/components/JobBoard/JobDetailPanel.tsx`. The dashboard split-pane uses **`JobDetailPane`** from `app/components/Jobs/`.
 
-**Result:**
+**Responsibility:** Two-tab panel (Job Details + Company Intel); shared labels/helpers from `@/app/dashboard/jobs/constants`.
 
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `app/components/JobBoard/JobDetailPanel.tsx` | 292 | Two-tab panel (Job Details + Company Intel); now imports from `constants.ts` instead of duplicating |
-
-**Change:** Removed local `SOURCE_LABELS`, `SOURCE_COLORS`, `AGE_TONE_STYLES`, `relativeTime`, `postingAgePill`, `pickBestSource`, `googleSearchUrl` — all now imported from `@/app/dashboard/jobs/constants`.
+**Legacy:** `app/components/JobBoard/*` may still exist for reference; prefer `@/app/components/Jobs/JobDetailPane` for new work.
 
 ---
 

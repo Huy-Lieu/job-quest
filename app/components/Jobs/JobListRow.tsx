@@ -1,12 +1,9 @@
 'use client'
 
-import { Button } from '@/components/ui/button'
 import { Trash2, Briefcase } from 'lucide-react'
 import type { JobWithScore } from '@/lib/types'
-import { FitScoreBadge } from '@/app/components/ui/FitScoreBadge'
 import { relativeTime, postingAgePill, pickBestSource, SOURCE_COLORS, SOURCE_LABELS, AGE_TONE_STYLES } from '@/app/dashboard/jobs/constants'
 import { fmt, TYPE_COLORS } from '@/app/components/Jobs/JobTableRow'
-import { JobDetailPane } from '@/app/components/Jobs/JobDetailPane'
 
 export function JobListRow({
   job,

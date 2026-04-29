@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -24,16 +24,20 @@ export default function ApplicationsPage() {
   const [submitting, setSubmitting]     = useState(false)
   const [form, setForm]                 = useState<AppForm>(EMPTY_FORM)
 
-  const fetchApplications = useCallback(async () => {
-    setLoading(true)
-    const res  = await fetch('/api/applications')
-    const data = await res.json()
-    if (res.ok) setApplications(data)
-    else setError(data.error)
-    setLoading(false)
+  useEffect(() => {
+    let cancelled = false
+    async function loadApplications() {
+      setLoading(true)
+      const res  = await fetch('/api/applications')
+      const data = await res.json()
+      if (cancelled) return
+      if (res.ok) setApplications(data)
+      else setError(data.error)
+      setLoading(false)
+    }
+    void loadApplications()
+    return () => { cancelled = true }
   }, [])
-
-  useEffect(() => { void fetchApplications() }, [fetchApplications])
 
   function showXpToasts(data: { xpGained?: number; newLevel?: number; newBadges?: string[]; statusLabel?: string }) {
     if ((data.xpGained ?? 0) > 0) {

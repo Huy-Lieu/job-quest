@@ -9,7 +9,6 @@ import * as sources                       from './sources'
 import type { WorkdayTenant }             from './sources'
 import {
   buildAtsUrls, resolveAtsSlugs, resolveWorkdayTenants, getKnownCareerUrls,
-  type AtsSlugs,
 } from './ats-resolver'
 
 /**

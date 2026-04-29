@@ -3,39 +3,31 @@
 import { CheckCircle2, Loader2 } from 'lucide-react'
 
 interface SearchProgressProps {
-  stage: string
-  found: number
-  enriched: number
-  scored: number
+  stage:     string
+  found:     number
+  unique:    number
   isRunning: boolean
 }
 
-export function SearchProgress({
-  stage,
-  found,
-  enriched,
-  scored,
-  isRunning,
-}: SearchProgressProps) {
+export function SearchProgress({ stage, found, unique, isRunning }: SearchProgressProps) {
   const stages = [
-    { key: 'scraping', label: 'Scraping', icon: '' },
-    { key: 'normalizing', label: 'Normalizing', icon: '' },
-    { key: 'enriching', label: 'Enriching', icon: '' },
-    { key: 'deduplicating', label: 'Deduplicating', icon: '' },
-    { key: 'scoring', label: 'Scoring', icon: '' },
-    { key: 'complete', label: 'Done', icon: 'v' },
+    { key: 'scraping',               label: 'Scraping' },
+    { key: 'normalizing',            label: 'Normalizing' },
+    { key: 'deduplicating',          label: 'Deduplicating' },
+    { key: 'fetching_descriptions',  label: 'Descriptions' },
+    { key: 'storing',                label: 'Saving' },
+    { key: 'complete',               label: 'Done' },
   ]
 
   const currentIndex = stages.findIndex((s) => s.key === stage)
 
   return (
     <div className="space-y-3">
-      {/* Stage indicator */}
+      {/* Stage pills */}
       <div className="flex gap-2 items-center flex-wrap">
         {stages.map((s, idx) => {
           const isActive = idx === currentIndex
-          const isDone = idx < currentIndex || (currentIndex === -1 && stage === 'complete')
-
+          const isDone   = idx < currentIndex || stage === 'complete'
           return (
             <div
               key={s.key}
@@ -47,7 +39,6 @@ export function SearchProgress({
                     : 'bg-gray-100 text-gray-500 dark:bg-gray-500/15 dark:text-gray-400'
               }`}
             >
-              <span className="inline-block mr-1">{s.icon}</span>
               {s.label}
             </div>
           )
@@ -56,22 +47,14 @@ export function SearchProgress({
 
       {/* Progress stats */}
       {isRunning && (
-        <div className="grid grid-cols-4 gap-2 text-xs">
+        <div className="grid grid-cols-2 gap-2 text-xs">
           <div className="bg-muted/50 rounded p-2 text-center">
             <p className="font-semibold text-foreground">{found}</p>
             <p className="text-muted-foreground">Found</p>
           </div>
           <div className="bg-muted/50 rounded p-2 text-center">
-            <p className="font-semibold text-foreground">--</p>
+            <p className="font-semibold text-foreground">{unique || '--'}</p>
             <p className="text-muted-foreground">Unique</p>
-          </div>
-          <div className="bg-muted/50 rounded p-2 text-center">
-            <p className="font-semibold text-foreground">{enriched}</p>
-            <p className="text-muted-foreground">Enriched</p>
-          </div>
-          <div className="bg-muted/50 rounded p-2 text-center">
-            <p className="font-semibold text-foreground">{scored}</p>
-            <p className="text-muted-foreground">Scored</p>
           </div>
         </div>
       )}
@@ -86,21 +69,21 @@ export function SearchProgress({
         />
       </div>
 
-      {/* Status message */}
+      {/* Status text */}
       {isRunning ? (
         <p className="text-xs text-muted-foreground flex items-center gap-1">
           <Loader2 className="h-3 w-3 animate-spin" />
-          {stage === 'scraping' && 'Fetching jobs from sources...'}
-          {stage === 'normalizing' && 'Normalizing data...'}
-          {stage === 'enriching' && 'Enriching with Claude...'}
-          {stage === 'deduplicating' && 'Removing duplicates...'}
-          {stage === 'scoring' && 'Scoring against resume...'}
-          {stage === 'complete' && 'Search complete!'}
+          {stage === 'scraping'      && 'Fetching jobs from sources…'}
+          {stage === 'normalizing'   && 'Normalizing data…'}
+          {stage === 'deduplicating'        && 'Removing duplicates…'}
+          {stage === 'fetching_descriptions' && 'Fetching full job descriptions…'}
+          {stage === 'storing'              && 'Saving to database…'}
+          {stage === 'complete'      && 'Search complete!'}
         </p>
       ) : stage === 'complete' ? (
         <p className="text-xs text-green-700 dark:text-green-400 flex items-center gap-1">
           <CheckCircle2 className="h-3 w-3" />
-          Search complete -- {found} found, {scored} scored
+          Search complete — {found} found, {unique} new
         </p>
       ) : null}
     </div>

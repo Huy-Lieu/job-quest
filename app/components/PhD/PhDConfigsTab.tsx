@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Settings2, Plus, Trash2, Play, Loader2 } from 'lucide-react'
+import { Settings2, Plus, Trash2, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { SearchConfig } from '@/lib/types'
 
@@ -13,12 +13,9 @@ interface Props {
   configs:        SearchConfig[]
   loadingConfigs: boolean
   setConfigs:     React.Dispatch<React.SetStateAction<SearchConfig[]>>
-  setTab:         (t: 'jobs' | 'configs' | 'runs' | 'watchlist') => void
-  fetchJobs:      (offset?: number) => void
-  fetchRuns:      () => void
 }
 
-export function PhDConfigsTab({ configs, loadingConfigs, setConfigs, setTab, fetchJobs, fetchRuns }: Props) {
+export function PhDConfigsTab({ configs, loadingConfigs, setConfigs }: Props) {
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving]     = useState(false)
   const [form, setForm]         = useState({

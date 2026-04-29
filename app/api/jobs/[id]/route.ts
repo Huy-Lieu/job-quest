@@ -7,9 +7,11 @@ import { authOptions } from '@/lib/auth'
 import { supabaseAdmin } from '@/lib/supabase'
 
 export async function GET(
-  _request: Request,
-  _context: { params: Promise<{ id: string }> }
+  request: Request,
+  context: { params: Promise<{ id: string }> }
 ) {
+  void request
+  void context
   const session = await getServerSession(authOptions)
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -27,15 +29,14 @@ export async function GET(
  * Soft delete — sets status='removed' so the job is hidden from the feed and
  * stays in place for the dedup layer (won't be re-scraped next run).
  *
- * Hard delete is intentionally NOT implemented here. See the plan at
- * ~/.claude/plans/only-focusing-on-the-glimmering-tiger.md ("Future Work:
- * Hard Delete Option") for the recommended phased approach (periodic SQL
- * cleanup first, then optional user-facing purge + blocklist table).
+ * Hard delete is intentionally not implemented here. Future work: optional
+ * periodic SQL cleanup or user-facing purge + blocklist, without breaking dedup.
  */
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  void request
   const session = await getServerSession(authOptions)
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

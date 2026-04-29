@@ -49,7 +49,7 @@ export function ManualPasteModal({ open, onClose, onJobAdded }: ManualPasteModal
       setPasted('')
       onClose()
       toast.success('Job added successfully')
-    } catch (err) {
+    } catch {
       setError('Network error -- please try again')
     } finally {
       setSubmitting(false)

@@ -2,20 +2,19 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import {
   ExternalLink, Trash2, MapPin,
   ChevronDown, ChevronUp, ArrowRight,
   Brain, Target, Zap, Users, Clock, CheckCircle2,
   AlertCircle, Lightbulb, DollarSign, Briefcase, GraduationCap, CalendarClock,
-  Building2, Loader2, RefreshCw, TrendingUp, Newspaper, Flag,
+  Building2, Loader2, RefreshCw,
 } from 'lucide-react'
-import type { JobWithScore } from '@/lib/types'
-import type { RoleIntel, OpportunitySignals, PrepareToApply } from '@/lib/claude/enricher'
+import type { JobWithScore, IntelSignal, RoleCompanyIntel } from '@/lib/types'
+import type { RoleIntel } from '@/lib/claude/enricher'
 import { SkillPill } from '@/app/components/ui/SkillPill'
 import {
   SOURCE_LABELS, SOURCE_COLORS, AGE_TONE_STYLES,
-  relativeTime, postingAgePill, stripHtml, pickBestSource, googleSearchUrl,
+  relativeTime, postingAgePill, pickBestSource, googleSearchUrl,
 } from '@/app/dashboard/jobs/constants'
 import { fmt, TYPE_COLORS } from '@/app/components/Jobs/JobTableRow'
 
@@ -114,14 +113,32 @@ function renderInlineBold(text: string): React.ReactNode {
   )
 }
 
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g,  "'")
+    .replace(/&nbsp;/g, ' ')
+}
+
 function renderJobDescription(raw: string): React.ReactNode {
   if (!raw) return null
-  if (isHtml(raw)) return renderHtmlDescription(raw)
-  const lines = raw.split(/\n/).map(l => l.trim()).filter(Boolean)
+  // Decode HTML entities regardless of whether the text is HTML or plain text
+  const decoded = decodeEntities(raw)
+  if (isHtml(decoded)) return renderHtmlDescription(decoded)
+  // Split "Header: content" inline into separate lines so the section header
+  // regex can match the keyword as a standalone line
+  const withHeaderSplit = decoded.replace(
+    /^(What you[''']ll be doing|What we need to see|What we[''']re looking for|Ways to stand out from the crowd|Ways to stand out|About the role|About the team|About you|Responsibilities|Key responsibilities|Requirements|Qualifications|Preferred qualifications|Minimum qualifications|Basic qualifications|Nice to have|Bonus points|Benefits|Compensation|Who you are|The role|Your role|Your impact|Your background|What you will do|What you['']ll do|What you bring|You will|We offer|Why join us|Your day to day|Day to day):\s+/gim,
+    '$1\n'
+  )
+  const lines = withHeaderSplit.split(/\n/).map(l => l.trim()).filter(Boolean)
   if (lines.length <= 2) {
-    const split = raw
+    const split = withHeaderSplit
       .replace(
-        /([.!?])\s+(What you[''']ll be doing|What we need to see|What we[''']re looking for|Ways to stand out|About the role|About the team|Responsibilities|Key responsibilities|Requirements|Qualifications|Preferred qualifications|Minimum qualifications|Basic qualifications|Nice to have|Bonus points|Benefits|Compensation|Who you are|The role|Your role|Your impact|Your background|What you will do|What you['']ll do|What you bring|You will|We offer|Why join us|Your day to day|Day to day)/gi,
+        /([.!?])\s+(What you[''']ll be doing|What we need to see|What we[''']re looking for|Ways to stand out from the crowd|Ways to stand out|About the role|About the team|Responsibilities|Key responsibilities|Requirements|Qualifications|Preferred qualifications|Minimum qualifications|Basic qualifications|Nice to have|Bonus points|Benefits|Compensation|Who you are|The role|Your role|Your impact|Your background|What you will do|What you['']ll do|What you bring|You will|We offer|Why join us|Your day to day|Day to day)/gi,
         '$1\n$2'
       )
       .split(/\n/).map(l => l.trim()).filter(Boolean)
@@ -587,25 +604,55 @@ function JdIntelligenceSection({
 
 // ── Company Intel tab ─────────────────────────────────────────────────────────
 
-interface CompanyIntelData {
-  summary:             string | null
-  recent_news:         string[] | null
-  strategic_direction: string | null
-  hiring_signals:      string[] | null
-  red_flags:           string[] | null
-  role_alignment?:     string | null
-  fetched_at?:         string
+interface FetchedIntel {
+  // Company-layer (cached, shared)
+  company_snapshot?:    { stage?: string | null; headcount?: string | null; revenue?: string | null; core_business?: string | null; key_products?: string | null } | null
+  strategic_signals?:   IntelSignal[] | null
+  leadership_culture?:  IntelSignal[] | null
+  hiring_signals?:      IntelSignal[] | string[] | string | null
+  red_flags?:           IntelSignal[] | string[] | string | null
+  fetched_at?:          string
+  // Role-layer (per-job)
+  role_alignment?:      string | null
+  role_company_intel?:  RoleCompanyIntel | null
 }
 
-function CompanyIntelTab({
-  job,
-}: {
-  job: JobWithScore
-}) {
-  const [loading,    setLoading]    = useState(false)
-  const [intel,      setIntel]      = useState<CompanyIntelData | null>(null)
-  const [alignment,  setAlignment]  = useState<string | null>(null)
-  const [error,      setError]      = useState<string | null>(null)
+function sentimentDot(s: string) {
+  if (s === 'positive') return 'bg-green-500'
+  if (s === 'risk')     return 'bg-red-500'
+  return 'bg-amber-500'
+}
+
+function SignalList({ signals }: { signals: IntelSignal[] }) {
+  return (
+    <ul className="space-y-2">
+      {signals.map((sig, i) => (
+        <li key={i} className="flex gap-2.5 text-sm text-foreground leading-relaxed">
+          <span className={`mt-1.5 h-1.5 w-1.5 rounded-full flex-shrink-0 ${sentimentDot(sig.sentiment)}`} />
+          {sig.text}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function toSignals(v: unknown): IntelSignal[] {
+  if (!v) return []
+  if (Array.isArray(v)) {
+    return v.map(item =>
+      typeof item === 'string'
+        ? { text: item, sentiment: 'positive' as const }
+        : item as IntelSignal
+    )
+  }
+  if (typeof v === 'string' && v) return [{ text: v, sentiment: 'positive' as const }]
+  return []
+}
+
+function CompanyIntelTab({ job }: { job: JobWithScore }) {
+  const [loading,   setLoading]   = useState(false)
+  const [intel,     setIntel]     = useState<FetchedIntel | null>(null)
+  const [error,     setError]     = useState<string | null>(null)
 
   async function fetchIntel() {
     setLoading(true)
@@ -621,9 +668,7 @@ function CompanyIntelTab({
       )
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Request failed')
-      const data = json.intel as CompanyIntelData & { role_alignment?: string }
-      setIntel(data)
-      setAlignment(data.role_alignment ?? null)
+      setIntel(json.intel as FetchedIntel)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -632,61 +677,37 @@ function CompanyIntelTab({
   }
 
   const hasIntel = intel !== null
+  const snap     = intel?.company_snapshot
+  const roleIntel: RoleCompanyIntel | null = intel?.role_company_intel ?? null
+  const alignment = intel?.role_alignment ?? null
+
+  const strategicSignals  = toSignals(intel?.strategic_signals)
+  const cultureSignals    = toSignals(intel?.leadership_culture)
+  const hiringSignals     = toSignals(intel?.hiring_signals)
+  const redFlagSignals    = toSignals(intel?.red_flags)
 
   return (
     <div className="space-y-5">
 
-      {/* Role Alignment — per-job, shown first */}
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-3.5 w-3.5 text-blue-500" />
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Role Alignment
-            </h3>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300 font-medium">
-              Per job · Haiku
-            </span>
-          </div>
-          {hasIntel && (
-            <button
-              onClick={fetchIntel}
-              disabled={loading}
-              className="text-muted-foreground hover:text-foreground transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            </button>
-          )}
+      {/* ── Empty state / trigger ── */}
+      {!hasIntel && !loading && (
+        <div className="rounded-md border border-dashed border-border px-3 py-5 text-center">
+          <p className="text-xs text-muted-foreground mb-3">
+            Get a full candidate briefing for this {job.company} role — strategy, culture, hiring context, and interview angle.
+          </p>
+          <Button size="sm" onClick={fetchIntel} className="gap-1.5">
+            <Building2 className="h-3.5 w-3.5" /> Get Company Intel
+          </Button>
         </div>
+      )}
 
-        {alignment ? (
-          <div className="rounded-md border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 px-3 py-2.5">
-            <p className="text-sm text-foreground leading-relaxed">{alignment}</p>
-          </div>
-        ) : hasIntel ? (
-          <p className="text-sm text-muted-foreground italic">No alignment signal found for this role.</p>
-        ) : (
-          <div className="rounded-md border border-dashed border-border px-3 py-4 text-center">
-            <p className="text-xs text-muted-foreground mb-3">
-              Get AI analysis of how this specific role connects to {job.company}&apos;s strategy.
-            </p>
-            <Button
-              size="sm"
-              onClick={fetchIntel}
-              disabled={loading}
-              className="gap-1.5"
-            >
-              {loading
-                ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Fetching…</>
-                : <><Building2 className="h-3.5 w-3.5" /> Get Company Intel</>
-              }
-            </Button>
-          </div>
-        )}
-      </div>
+      {loading && (
+        <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Fetching {job.company} intel…
+        </div>
+      )}
 
-      {/* Error */}
       {error && (
         <div className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2.5">
           <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
@@ -694,69 +715,111 @@ function CompanyIntelTab({
         </div>
       )}
 
-      {/* Company-wide intel — shown after fetch */}
       {hasIntel && (
         <>
-          {/* Summary */}
-          {intel.summary && (
-            <div>
-              <SubHeader label="Company overview" />
-              <p className="text-sm text-foreground leading-relaxed">{intel.summary}</p>
+          {/* Header row with refresh */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{job.company}</span>
             </div>
-          )}
+            <button
+              onClick={fetchIntel}
+              disabled={loading}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+              title="Refresh intel"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
 
-          {/* Strategic direction */}
-          {intel.strategic_direction && (
+          {/* ── 1. Role alignment ── */}
+          {alignment && (
             <div>
-              <SubHeader label="Strategic direction" />
-              <div className="rounded-md border border-border bg-muted/20 px-3 py-2.5">
-                <p className="text-sm text-foreground leading-relaxed">{intel.strategic_direction}</p>
+              <SubHeader label="Role alignment" />
+              <div className="rounded-md border border-blue-200 dark:border-blue-500/30 bg-blue-50 dark:bg-blue-500/10 px-3 py-2.5">
+                <p className="text-sm text-foreground leading-relaxed">{alignment}</p>
               </div>
             </div>
           )}
 
-          {/* Recent news */}
-          {intel.recent_news && intel.recent_news.length > 0 && (
+          {/* ── 2. Company snapshot ── */}
+          {snap && (snap.stage || snap.headcount || snap.revenue || snap.core_business) && (
             <div>
-              <SubHeader label="Recent news" />
-              <ul className="space-y-2">
-                {intel.recent_news.map((item, i) => (
-                  <li key={i} className="flex gap-2 text-sm text-foreground leading-relaxed">
-                    <Newspaper className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-muted-foreground" />
-                    {item}
-                  </li>
-                ))}
-              </ul>
+              <SubHeader label="Company snapshot" />
+              <div className="rounded-md border border-border divide-y divide-border text-sm">
+                {snap.stage         && <div className="flex justify-between px-3 py-1.5"><span className="text-muted-foreground">Stage</span><span className="font-medium">{snap.stage}</span></div>}
+                {snap.headcount     && <div className="flex justify-between px-3 py-1.5"><span className="text-muted-foreground">Headcount</span><span className="font-medium">{snap.headcount}</span></div>}
+                {snap.revenue       && <div className="flex justify-between px-3 py-1.5"><span className="text-muted-foreground">Revenue</span><span className="font-medium">{snap.revenue}</span></div>}
+                {snap.core_business && <div className="flex justify-between px-3 py-1.5"><span className="text-muted-foreground">Core business</span><span className="font-medium text-right max-w-[60%]">{snap.core_business}</span></div>}
+                {snap.key_products  && <div className="flex justify-between px-3 py-1.5"><span className="text-muted-foreground">Key products</span><span className="font-medium text-right max-w-[60%]">{snap.key_products}</span></div>}
+              </div>
             </div>
           )}
 
-          {/* Hiring signals */}
-          {intel.hiring_signals && intel.hiring_signals.length > 0 && (
+          {/* ── 3. Strategic direction ── */}
+          {strategicSignals.length > 0 && (
+            <div>
+              <SubHeader label="Strategic direction" />
+              <SignalList signals={strategicSignals} />
+            </div>
+          )}
+
+          {/* ── 4. What you're walking into (role-layer) ── */}
+          {roleIntel?.walking_into && roleIntel.walking_into.length > 0 && (
+            <div>
+              <SubHeader label="What you're walking into" />
+              <SignalList signals={roleIntel.walking_into} />
+            </div>
+          )}
+
+          {/* ── 5. Business context (role-layer) ── */}
+          {roleIntel?.business_context && roleIntel.business_context.length > 0 && (
+            <div>
+              <SubHeader label="Business context for this role" />
+              <SignalList signals={roleIntel.business_context} />
+            </div>
+          )}
+
+          {/* ── 6. Leadership & culture ── */}
+          {cultureSignals.length > 0 && (
+            <div>
+              <SubHeader label="Leadership & culture" />
+              <SignalList signals={cultureSignals} />
+            </div>
+          )}
+
+          {/* ── 7. Hiring signals ── */}
+          {hiringSignals.length > 0 && (
             <div>
               <SubHeader label="Hiring signals" />
-              <ul className="space-y-2">
-                {intel.hiring_signals.map((sig, i) => (
-                  <li key={i} className="flex gap-2 text-sm text-foreground leading-relaxed">
-                    <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-green-500" />
-                    {sig}
-                  </li>
-                ))}
-              </ul>
+              <SignalList signals={hiringSignals} />
             </div>
           )}
 
-          {/* Red flags */}
-          {intel.red_flags && intel.red_flags.length > 0 && (
+          {/* ── 8. Red flags ── */}
+          {redFlagSignals.length > 0 && (
             <div>
-              <SubHeader label="Red flags" />
-              <ul className="space-y-2">
-                {intel.red_flags.map((flag, i) => (
-                  <li key={i} className="flex gap-2 text-sm text-foreground leading-relaxed">
-                    <Flag className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-red-500" />
-                    {flag}
-                  </li>
-                ))}
-              </ul>
+              <SubHeader label="Risks & red flags" />
+              <SignalList signals={redFlagSignals} />
+            </div>
+          )}
+
+          {/* ── 9. What this means for you (role-layer) ── */}
+          {roleIntel?.what_this_means && roleIntel.what_this_means.length > 0 && (
+            <div>
+              <SubHeader label="What this means for you" />
+              <SignalList signals={roleIntel.what_this_means} />
+            </div>
+          )}
+
+          {/* ── 10. Interview narrative (role-layer) ── */}
+          {roleIntel?.interview_narrative && (
+            <div>
+              <SubHeader label="Your interview angle" />
+              <div className="rounded-md border-l-2 border-blue-400 dark:border-blue-500 bg-muted/30 px-3 py-2.5">
+                <p className="text-sm text-foreground leading-relaxed">{roleIntel.interview_narrative}</p>
+              </div>
             </div>
           )}
 
@@ -1006,7 +1069,6 @@ export function JobDetailPane({
               <div className="mt-2">
                 <p className="text-xs font-medium text-red-600 dark:text-red-400 mb-1">Gaps</p>
                 <div className="flex flex-wrap gap-1">
-                  {score.skills_missing.map((s) => <SkillPill key={s} label={s} variant="missing" />)}
                 </div>
               </div>
             )}

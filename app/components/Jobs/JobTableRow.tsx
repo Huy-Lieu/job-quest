@@ -1,15 +1,11 @@
 'use client'
 
-import { useState } from 'react'
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { ExternalLink, Trash2, MapPin, Building2, ArrowRight } from 'lucide-react'
+import { ExternalLink, Trash2, ArrowRight } from 'lucide-react'
 import type { JobWithScore } from '@/lib/types'
-import { SkillPill } from '@/app/components/ui/SkillPill'
-import { FitScoreBadge } from '@/app/components/ui/FitScoreBadge'
 import {
-  SOURCE_LABELS, SOURCE_COLORS, AGE_TONE_STYLES,
-  relativeTime, postingAgePill, stripHtml, pickBestSource, googleSearchUrl,
+  SOURCE_LABELS, SOURCE_COLORS,
+  stripHtml, pickBestSource, googleSearchUrl,
 } from '@/app/dashboard/jobs/constants'
 
 

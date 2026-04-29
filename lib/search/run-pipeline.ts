@@ -43,17 +43,14 @@ export async function runPipelineForConfig(config: SearchConfig): Promise<number
     await (supabaseAdmin as any)
       .from('search_runs')
       .update({
-        status:        'complete',
-        completed_at:  now,
-        jobs_found:    result.found,
-        jobs_new:      result.inserted,
-        jobs_enriched: result.enriched,
-        jobs_scored:   result.scored,
-        progress:      {
+        status:       'complete',
+        completed_at: now,
+        jobs_found:   result.found,
+        jobs_new:     result.inserted,
+        progress:     {
           stage:     'complete',
           found:     result.found,
           unique:    result.unique,
-          scored:    result.scored,
           jobsAdded: result.inserted,
         },
       })
@@ -63,7 +60,6 @@ export async function runPipelineForConfig(config: SearchConfig): Promise<number
       '[cron] Config', config.id, 'complete —',
       'found:', result.found,
       'new:', result.inserted,
-      'scored:', result.scored,
     )
     return result.inserted
 

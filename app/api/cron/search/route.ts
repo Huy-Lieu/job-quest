@@ -1,6 +1,7 @@
 // app/api/cron/search/route.ts
-// Vercel Cron — runs daily at 07:00 UTC, triggers search for all due configs
-// Configure in vercel.json: { "crons": [{ "path": "/api/cron/search", "schedule": "0 7 * * *" }] }
+// Intended for Vercel Cron (e.g. 07:00 UTC) — triggers due configs via POST /api/search/run.
+// Product note: scheduled automation is still optional; see jobquest-search-architecture.md.
+// Configure in vercel.json when you enable it: { "crons": [{ "path": "/api/cron/search", "schedule": "0 7 * * *" }] }
 
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'

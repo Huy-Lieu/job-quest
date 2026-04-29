@@ -16,8 +16,6 @@ interface Props {
   setMinScore:    (v: number) => void
   source:         string
   setSource:      (v: string) => void
-  jobType:        string
-  setJobType:     (v: string) => void
   recommendedOnly: boolean
   setRecommendedOnly: (v: boolean) => void
   fetchJobs:      (offset?: number, append?: boolean) => void
@@ -29,7 +27,7 @@ interface Props {
 export function PhDJobsTab({
   jobs, total, offset, loadingJobs, jobsError,
   minScore, setMinScore, source, setSource,
-  jobType, setJobType, recommendedOnly, setRecommendedOnly,
+  recommendedOnly, setRecommendedOnly,
   fetchJobs, LIMIT, configs, setTab,
 }: Props) {
   return (

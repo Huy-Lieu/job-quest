@@ -1,12 +1,20 @@
 // lib/context.ts
-// Shared data assembler — reads enriched job data, fit score, and company intel
-// from DB in parallel. Never triggers Claude calls. Returns nulls for anything
-// not yet computed. Used by the job detail panel API and the Resume page.
+// Shared data assembler — reads job row, fit score, and company intel from DB
+// in parallel. Never calls Claude. Returns nulls for fields not yet stored.
+// Call from API routes or server code that need one consistent payload (optional).
 
 import { supabaseAdmin } from '@/lib/supabase'
-import type { Seniority, RoleType, JobScore, JobSource } from '@/lib/types'
+import type { Seniority, RoleType, JobScore, JobSource, IntelSignal, RoleCompanyIntel } from '@/lib/types'
 
 // ── output shape ──────────────────────────────────────────────────────────────
+
+export interface CompanySnapshot {
+  stage:         string | null
+  headcount:     string | null
+  revenue:       string | null
+  core_business: string | null
+  key_products:  string | null
+}
 
 export interface CompanyIntel {
   company_name:        string
@@ -17,6 +25,10 @@ export interface CompanyIntel {
   red_flags:           string | null
   fetched_at:          string
   expires_at:          string
+  // Structured fields from new 3-query synthesis (null for legacy cached rows)
+  company_snapshot:    CompanySnapshot | null
+  strategic_signals:   IntelSignal[] | null
+  leadership_culture:  IntelSignal[] | null
 }
 
 export interface JobContext {
@@ -54,6 +66,9 @@ export interface JobContext {
   seniority_level:      Seniority | null
   role_type:            RoleType | null
   enriched_at:          string | null
+
+  // Per-job role-level company intel
+  role_company_intel:   RoleCompanyIntel | null
 
   // Fit score (null = not yet scored for this user)
   fitScore: JobScore | null
@@ -99,6 +114,7 @@ interface JobRow {
   seniority_level:      string | null
   role_type:            string | null
   enriched_at:          string | null
+  role_company_intel:   RoleCompanyIntel | null
   job_sources:          { source_name: string; source_url: string }[]
 }
 
@@ -119,6 +135,9 @@ interface IntelRow {
   red_flags:           string | null
   fetched_at:          string
   expires_at:          string
+  company_snapshot:    CompanySnapshot | null
+  strategic_signals:   IntelSignal[] | null
+  leadership_culture:  IntelSignal[] | null
 }
 
 // ── main export ───────────────────────────────────────────────────────────────
@@ -145,7 +164,7 @@ export async function buildJobContext(
         'visa_sponsorship, experience_years_min, experience_years_max, ' +
         'education_level, security_clearance, benefits_highlights, ' +
         'languages_required, seniority_level, role_type, enriched_at, ' +
-        'job_sources(source_name, source_url)'
+        'role_company_intel, job_sources(source_name, source_url)'
       )
       .eq('id', jobId)
       .maybeSingle() as Promise<{ data: JobRow | null; error: unknown }>,
@@ -170,7 +189,8 @@ export async function buildJobContext(
     .from('company_intel')
     .select(
       'company_name, summary, recent_news, strategic_direction, ' +
-      'hiring_signals, red_flags, fetched_at, expires_at'
+      'hiring_signals, red_flags, fetched_at, expires_at, ' +
+      'company_snapshot, strategic_signals, leadership_culture'
     )
     .eq('company_name', job.company)
     .gt('expires_at', new Date().toISOString())
@@ -216,6 +236,9 @@ export async function buildJobContext(
     role_type:            (job.role_type as RoleType) ?? null,
     enriched_at:          job.enriched_at,
 
+    // Role-level company intel
+    role_company_intel:   job.role_company_intel ?? null,
+
     // Fit score
     fitScore: score
       ? {
@@ -241,6 +264,9 @@ export async function buildJobContext(
           red_flags:           intel.red_flags,
           fetched_at:          intel.fetched_at,
           expires_at:          intel.expires_at,
+          company_snapshot:    intel.company_snapshot ?? null,
+          strategic_signals:   intel.strategic_signals ?? null,
+          leadership_culture:  intel.leadership_culture ?? null,
         }
       : null,
   }

@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Sun, Moon, Monitor } from 'lucide-react'
 
@@ -14,11 +13,9 @@ const OPTIONS: Array<{ value: ThemeValue; Icon: typeof Sun; label: string }> = [
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => setMounted(true), [])
 
   // Reserve space pre-mount to avoid layout shift
-  if (!mounted) return <div className="h-9" aria-hidden />
+  if (!theme) return <div className="h-9" aria-hidden />
 
   return (
     <div

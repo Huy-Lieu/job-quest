@@ -8,7 +8,6 @@ import { FileText, Plus, Star, Trash2, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ResumeVersion, JobWithScore, AnalysisResult } from '@/lib/types'
 
-import { MarkdownBlock }           from '@/app/components/Resume/MarkdownBlock'
 import { MasterResumeModal }       from '@/app/components/Resume/MasterResumeModal'
 import { AnalyzeJobModal }         from '@/app/components/Resume/AnalyzeJobModal'
 import { AnalysisResultsSection }  from '@/app/components/Resume/AnalysisResultsSection'
@@ -69,14 +68,14 @@ export default function ResumePage() {
         analyzeForm.jobDescription.match(/^([A-Z][a-zA-Z\s&]+?)(?:\n|is hiring|seeks)/)
       if (match) setAnalyzeForm(f => ({ ...f, companySearchQuery: `"${match[1].trim()}" news 2025 OR 2026` }))
     }
-  }, [analyzeForm.jobDescription])
+  }, [analyzeForm.jobDescription, analyzeForm.jobInputMode])
 
   useEffect(() => {
     if (analyzeForm.jobInputMode === 'flagged' && analyzeForm.selectedJobId) {
       const job = flaggedJobs.find(j => j.id === analyzeForm.selectedJobId)
       if (job) setAnalyzeForm(f => ({ ...f, companySearchQuery: `"${job.company}" news 2025 OR 2026`, jobDescription: job.description ?? '' }))
     }
-  }, [analyzeForm.selectedJobId, analyzeForm.jobInputMode])
+  }, [analyzeForm.selectedJobId, analyzeForm.jobInputMode, flaggedJobs])
 
   useEffect(() => {
     if (showAnalyzeModal && masters.length > 0) {

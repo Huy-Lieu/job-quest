@@ -439,12 +439,16 @@ async function enrichBatch(batch: NormalizedJob[]): Promise<EnrichedFields[]> {
 
     const results = parsed
       .sort((a, b) => a.index - b.index)
-      .map(({ index: _index, ...fields }) => ({
-        ...fields,
-        // Guarantee role_intel is always present — Haiku sometimes omits it
-        // when the output is large, causing a silent NULL in the DB.
-        role_intel: fields.role_intel ?? emptyRoleIntel(),
-      } as EnrichedFields))
+      .map((item) => {
+        const fields = { ...item } as Partial<EnrichedFields> & { index?: number }
+        delete fields.index
+        return {
+          ...fields,
+          // Guarantee role_intel is always present — Haiku sometimes omits it
+          // when the output is large, causing a silent NULL in the DB.
+          role_intel: fields.role_intel ?? emptyRoleIntel(),
+        } as EnrichedFields
+      })
 
     const withIntel = results.filter(r => r.role_intel?.role_translation?.day_to_day).length
     console.log(`[enricher] batch ok: ${results.length} jobs, role_intel populated=${withIntel}/${results.length}, total=${Date.now() - t0}ms`)

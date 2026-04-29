@@ -1,8 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { Clock, Settings2, GraduationCap, Bookmark } from 'lucide-react'
 import type { JobWithScore, SearchConfig, SearchRun } from '@/lib/types'
 import { WatchlistTab, WatchlistEntry } from '@/app/components/PhD/WatchlistTab'
@@ -30,7 +28,6 @@ export default function PhDPage() {
   // Filters
   const [minScore, setMinScore]               = useState(0)
   const [source, setSource]                   = useState('')
-  const [jobType, setJobType]                 = useState('')
   const [recommendedOnly, setRecommendedOnly] = useState(false)
 
   // Configs tab state
@@ -77,7 +74,7 @@ export default function PhDPage() {
     } finally {
       setLoadingJobs(false)
     }
-  }, [minScore, source, jobType, recommendedOnly])
+  }, [minScore, source, recommendedOnly])
 
   const fetchConfigs = useCallback(async () => {
     setLoadingConfigs(true)
@@ -122,7 +119,7 @@ export default function PhDPage() {
     if (tab === 'watchlist') fetchWatchlist()
   }, [tab, fetchWatchlist])
 
-  useEffect(() => { fetchJobs(0) }, [minScore, source, jobType, recommendedOnly, fetchJobs])
+  useEffect(() => { fetchJobs(0) }, [minScore, source, recommendedOnly, fetchJobs])
 
   // ── Tabs ────────────────────────────────────────────────────────────────────
 
@@ -180,8 +177,6 @@ export default function PhDPage() {
           setMinScore={setMinScore}
           source={source}
           setSource={setSource}
-          jobType={jobType}
-          setJobType={setJobType}
           recommendedOnly={recommendedOnly}
           setRecommendedOnly={setRecommendedOnly}
           fetchJobs={fetchJobs}
@@ -197,9 +192,6 @@ export default function PhDPage() {
           configs={configs}
           loadingConfigs={loadingConfigs}
           setConfigs={setConfigs}
-          setTab={setTab}
-          fetchJobs={fetchJobs}
-          fetchRuns={fetchRuns}
         />
       )}
 

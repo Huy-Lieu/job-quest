@@ -1,14 +1,12 @@
 'use client'
 
-import { useState, useCallback } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Loader2, Play, Pencil, Copy, Trash2, MapPin, Building2, Clock, Settings2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import type { SearchConfig } from '@/lib/types'
-import { toast } from 'sonner'
 import { NewConfigForm } from '@/app/components/Search/NewConfigForm'
-import { SOURCE_LABELS, SOURCE_COLORS, AVAILABLE_SOURCES } from '@/app/dashboard/jobs/constants'
+import { SOURCE_LABELS, SOURCE_COLORS } from '@/app/dashboard/jobs/constants'
 
 interface JobConfigsTabProps {
   configs: SearchConfig[]
@@ -33,13 +31,9 @@ export function JobConfigsTab({
   duplicateConfig,
   onDeleteConfig,
 }: JobConfigsTabProps) {
-  const [createdConfigs, setCreatedConfigs] = useState<SearchConfig[]>([])
-
   return (
     <div className="space-y-4">
-      <NewConfigForm onCreated={(c) => {
-        setCreatedConfigs((prev) => [c, ...prev])
-      }} />
+      <NewConfigForm />
 
       {loadingConfigs ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">

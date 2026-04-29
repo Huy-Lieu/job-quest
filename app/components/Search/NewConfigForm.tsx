@@ -31,6 +31,7 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
   const [schedule, setSchedule]   = useState<ScheduleInterval>(initialValues?.schedule_interval ?? 'daily')
   const [careerPageUrls, setCareerPageUrls] = useState((initialValues?.career_page_urls ?? []).join('\n'))
   const [serpEnabled, setSerpEnabled]       = useState(initialValues?.serp_enabled ?? false)
+  const [serpQuery,   setSerpQuery]         = useState(initialValues?.serp_query ?? '')
   const [saving, setSaving]       = useState(false)
   const [error, setError]         = useState('')
 
@@ -40,7 +41,7 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
 
   function resetCreateFields() {
     setName(''); setKeywords(''); setCompanies(''); setLocations('United States')
-    setSources([...AVAILABLE_SOURCES]); setSchedule('daily'); setCareerPageUrls(''); setSerpEnabled(false)
+    setSources([...AVAILABLE_SOURCES]); setSchedule('daily'); setCareerPageUrls(''); setSerpEnabled(false); setSerpQuery('')
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -55,6 +56,7 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
       sources,
       career_page_urls:  careerPageUrls.split('\n').map((u) => u.trim()).filter(Boolean),
       serp_enabled:      serpEnabled,
+      serp_query:        serpQuery.trim() || null,
       schedule_interval: schedule,
     }
 
@@ -116,6 +118,25 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
         <span className="text-xs text-muted-foreground">— broader coverage, uses API quota</span>
       </label>
 
+      {serpEnabled && (
+        <div className="space-y-1 pl-6 border-l-2 border-blue-200 dark:border-blue-800">
+          <label className="text-sm font-medium">
+            Google Jobs query <span className="text-red-500">*</span>
+          </label>
+          <Input
+            placeholder="e.g. Embedded Test Engineer"
+            value={serpQuery}
+            onChange={(e) => setSerpQuery(e.target.value)}
+            className={serpEnabled && !serpQuery.trim() ? 'border-red-400' : ''}
+          />
+          <div className="text-xs text-muted-foreground space-y-0.5">
+            <p>Use <strong>3–5 words separated by spaces</strong> — treated as a Google search phrase.</p>
+            <p>✓ <span className="text-foreground">Embedded Test Engineer</span> — good, concise</p>
+            <p>✗ <span className="text-foreground">embedded, test, verification, FPGA</span> — commas cause 503 errors</p>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1">
         <label className="text-sm font-medium">Sources</label>
         <div className="flex flex-wrap gap-2">
@@ -157,14 +178,14 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
           value={schedule}
           onChange={(e) => setSchedule(e.target.value as ScheduleInterval)}
         >
-          <option value="daily">Daily (07:00 UTC)</option>
+          <option value="daily">Daily (when scheduled search is enabled)</option>
           <option value="6h">Every 6 hours</option>
           <option value="manual">Manual only</option>
         </select>
       </div>
 
       <div className="flex gap-2">
-        <Button type="submit" disabled={saving || !keywords.trim()} className="gap-1">
+        <Button type="submit" disabled={saving || !keywords.trim() || (serpEnabled && !serpQuery.trim())} className="gap-1">
           {saving ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Saving…</> : isEdit ? 'Save changes' : 'Save Config'}
         </Button>
         <Button type="button" variant="outline" onClick={() => (isEdit ? onClose?.() : setOpen(false))}>

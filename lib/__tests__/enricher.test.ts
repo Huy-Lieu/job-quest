@@ -171,13 +171,6 @@ describe('EnrichedFields visa_sponsorship values', () => {
     expect(e.visa_sponsorship).toBe(val)
   })
 })
-neric soft skills
-    const hasGeneric = intel.ats_keywords.some(k =>
-      ['communication', 'teamwork', 'leadership'].includes(k.toLowerCase())
-    )
-    expect(hasGeneric).toBe(false)
-  })
-})
 
 describe('EnrichedFields work_mode values', () => {
   const validModes = ['remote', 'hybrid', 'on-site', 'unknown'] as const

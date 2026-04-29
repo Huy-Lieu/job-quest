@@ -1,17 +1,16 @@
 // lib/pipeline/deduplicate.ts
-// 3-stage deduplication pipeline. Fast stages first — Claude only as last resort.
+// 2-stage deduplication pipeline. Free stages only — no Claude calls.
 //
 // Stage 1: source_job_id exact match in job_sources table  (fastest, DB index)
 // Stage 2: SHA-256 hash of (company|title|location) in jobs.raw_hash  (fast, DB index)
-// Stage 3: Claude Haiku fuzzy YES/NO  (slow — only after enrich, only for ambiguous pairs)
+// Stage 3: free title-similarity fuzzy check within the same company  (fast, in-memory)
 //
 // The pipeline calls these in two separate passes:
-//   deduplicateEarly()  — Stages 1+2 (free, before enrichment)
-//   deduplicateFuzzy()  — Stage 3    (paid, after enrichment)
+//   deduplicateEarly()  — Stages 1+2 (free, before location filter)
+//   deduplicateFuzzy()  — Stage 3    (free, after location filter)
 
 import crypto from 'crypto'
 import { supabaseAdmin } from '@/lib/supabase'
-import { areFuzzyDuplicates, type DedupPair } from '@/lib/claude/dedup'
 import type { NormalizedJob } from '@/lib/pipeline/normalize'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -24,17 +23,21 @@ function hashJob(job: NormalizedJob): string {
   return sha256(job.company + '|' + job.canonical_title + '|' + job.location)
 }
 
+function normTitle(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function titlesAreSimilar(a: string, b: string): boolean {
+  const na = normTitle(a)
+  const nb = normTitle(b)
+  if (na === nb) return true
+  const shorter = na.length <= nb.length ? na : nb
+  const longer  = na.length <= nb.length ? nb : na
+  return shorter.length > 8 && longer.includes(shorter)
+}
+
 // ── Stage 1 + 2: cheap DB deduplication ──────────────────────────────────────
 
-/**
- * Stages 1 and 2 — free, DB-only deduplication.
- * Call this BEFORE enrichment to avoid paying Claude for jobs already in the DB.
- *
- * Stage 1: source_job_id exact match in job_sources
- * Stage 2: SHA-256 hash match in jobs.raw_hash (+ within-batch check)
- *
- * Returns surviving jobs, each augmented with their computed raw_hash.
- */
 export async function deduplicateEarly(
   jobs: NormalizedJob[]
 ): Promise<NormalizedJob[]> {
@@ -43,7 +46,6 @@ export async function deduplicateEarly(
   let filteredByHash     = 0
 
   for (const job of jobs) {
-    // ── Stage 1: source job ID ────────────────────────────────────────────────
     if (job.source.source_job_id && job.source.name) {
       const { data: existing } = await supabaseAdmin
         .from('job_sources')
@@ -58,7 +60,6 @@ export async function deduplicateEarly(
       }
     }
 
-    // ── Stage 2: SHA-256 content hash ─────────────────────────────────────────
     const hash = hashJob(job)
 
     const { data: hashMatch } = await supabaseAdmin
@@ -72,7 +73,6 @@ export async function deduplicateEarly(
       continue
     }
 
-    // Within-batch hash dedup — catches duplicates across sources in the same run
     const withinBatchDup = survivors.some(j => j.raw_hash === hash)
     if (withinBatchDup) {
       filteredByHash++
@@ -92,17 +92,8 @@ export async function deduplicateEarly(
   return survivors
 }
 
-// ── Stage 3: Claude Haiku fuzzy deduplication ─────────────────────────────────
+// ── Stage 3: free title-similarity fuzzy deduplication ───────────────────────
 
-/**
- * Stage 3 — Claude Haiku fuzzy deduplication.
- * Call this AFTER enrichment, only on the survivors of deduplicateEarly().
- *
- * Compares each job against same-company jobs already accepted this run.
- * All pairs for a given job are sent in a single batched Claude call.
- *
- * Returns the final unique set.
- */
 export async function deduplicateFuzzy(
   jobs: NormalizedJob[]
 ): Promise<NormalizedJob[]> {
@@ -114,19 +105,13 @@ export async function deduplicateFuzzy(
       j => j.company.toLowerCase() === job.company.toLowerCase()
     )
 
-    if (sameCompanyCandidates.length > 0) {
-      const pairs: DedupPair[] = sameCompanyCandidates.map(candidate => ({
-        jobA: job,
-        jobB: candidate,
-      }))
+    const isFuzzyDup = sameCompanyCandidates.some(
+      candidate => titlesAreSimilar(job.canonical_title, candidate.canonical_title)
+    )
 
-      const results = await areFuzzyDuplicates(pairs)
-      const isFuzzyDup = results.some(Boolean)
-
-      if (isFuzzyDup) {
-        filteredByFuzzy++
-        continue
-      }
+    if (isFuzzyDup) {
+      filteredByFuzzy++
+      continue
     }
 
     unique.push(job)
@@ -141,12 +126,7 @@ export async function deduplicateFuzzy(
   return unique
 }
 
-// ── Legacy export — kept for backward compatibility ───────────────────────────
-
-/**
- * @deprecated Use deduplicateEarly() + deduplicateFuzzy() separately.
- * This combines all 3 stages in one pass — wasteful when enrichment runs between them.
- */
+/** @deprecated Use deduplicateEarly() + deduplicateFuzzy() separately. */
 export async function deduplicateJobs(
   jobs: NormalizedJob[]
 ): Promise<NormalizedJob[]> {

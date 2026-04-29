@@ -109,11 +109,11 @@ async function runStreamPipeline(
 
   // Progress map: stage → SSE progress percentage
   const STAGE_PROGRESS: Record<string, number> = {
-    scraping:      10,
-    normalizing:   25,
-    enriching:     45,
-    deduplicating: 60,
-    scoring:       80,
+    scraping:              10,
+    normalizing:           30,
+    deduplicating:         50,
+    fetching_descriptions: 70,
+    storing:               88,
   }
 
   /** Emit SSE progress event and write to polling fallback column. */
@@ -177,12 +177,10 @@ async function runStreamPipeline(
     await (supabaseAdmin as any)
       .from('search_runs')
       .update({
-        status:        'complete',
-        completed_at:  new Date().toISOString(),
-        jobs_found:    result.found,
-        jobs_new:      result.inserted,
-        jobs_enriched: result.enriched,
-        jobs_scored:   result.scored,
+        status:       'complete',
+        completed_at: new Date().toISOString(),
+        jobs_found:   result.found,
+        jobs_new:     result.inserted,
       })
       .eq('id', runId)
 
@@ -190,9 +188,7 @@ async function runStreamPipeline(
       stage:     'complete',
       progress:  100,
       found:     result.found,
-      enriched:  result.enriched,
       unique:    result.unique,
-      scored:    result.scored,
       jobsAdded: result.inserted,
       runId,
     })
@@ -235,13 +231,12 @@ export async function DELETE(request: Request) {
   return NextResponse.json({ ok: true })
 }
 
-// ── POST — same as GET but reads configId from JSON body ──────────────────────
-
 export async function POST(request: Request) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const body = await request.json().catch(() => ({}))
-  const configId = body?.configId
+  const configId = body.configId
   if (!configId) return NextResponse.json({ error: 'configId is required' }, { status: 400 })
-
   const url = new URL(request.url)
   url.searchParams.set('configId', configId)
   return GET(new Request(url.toString(), { headers: request.headers }))

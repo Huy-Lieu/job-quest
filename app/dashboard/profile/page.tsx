@@ -4,9 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { BADGE_DEFINITIONS } from '@/lib/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
-import { Badge } from '@/components/ui/badge'
 import {
-  Star,
   Flame,
   Trophy,
   Lock,

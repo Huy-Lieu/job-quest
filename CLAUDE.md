@@ -12,7 +12,7 @@ npm run build     # Production build
 npm run lint      # ESLint
 ```
 
-There is no test suite configured.
+Unit tests: `npm test` (Vitest). See `package.json` scripts.
 
 ## Architecture Overview
 
@@ -20,17 +20,17 @@ JobQuest is an AI-powered job application tracker built with Next.js App Router,
 
 **Core flows:**
 
-1. **Job Search Pipeline** (`/api/search/stream`, `/api/search/run`): Fires Apify scrapers + SerpAPI in parallel → normalizes raw output → early dedup (source ID + hash, free) → location filter (ISO country code matching, free) → **Workday description fetch** (Apify RAG browser, survivors only, sequential) → **Haiku enrichment pass** (extracts structured fields from full JD text, 10 jobs/call) → fuzzy dedup (Claude Haiku YES/NO) → batch-scores jobs against the user's active resume using Claude Sonnet (5 jobs/call). Results stored in `jobs`, `job_sources`, `job_scores`. Progress streamed via SSE (`maxDuration = 300`). Shared pipeline logic lives in `lib/pipeline/core.ts` — used by both the SSE route and the cron runner.
+1. **Job Search Pipeline** (`/api/search/stream`, `/api/search/run`): Fires Apify scrapers + SerpAPI in parallel → normalizes raw output → early dedup (source ID + hash, free) → location filter (ISO country code matching, free) → description fetch for weak ATS listings (Apify rag-web-browser, parallel batches of 3) → fuzzy dedup (free title-similarity, no Claude) → store jobs in `jobs` + `job_sources`. No Claude at search time — LLM enrichment and scoring are on-demand only. Progress streamed via SSE (`maxDuration = 300`) with auto-reconnect (1 retry after 3 s). Shared pipeline logic: `lib/pipeline/core.ts` (`runPipelineCore`). Primary trigger today: **SSE from the dashboard**; `POST /api/search/run` exists for internal/cron-style callers (see Cron note below).
 
-2. **Shared Context** (`lib/context.ts` → `buildJobContext()`): Reads enriched job data, fit scores, and company intel from DB before calling Claude. Only fetches what's missing. Used by both the job detail panel and the Resume page to avoid redundant recomputation.
+2. **Shared Context** (`lib/context.ts` → `buildJobContext()`): DB-only assembler for job row + scores + company intel (no Claude). Intended for routes or features that need one consistent payload; wire it where needed.
 
-3. **Resume Analysis** (`/api/resume/analyze`): 7-layer Claude Sonnet analysis (gap analysis, ATS score, 2× tailored resumes, interview prep, cover letter). Reads from `analysis_sessions` if available; only runs Claude for missing sections. Stored per job+resume combo.
+3. **Resume Analysis** (`/api/resume/analyze`): Multi-step Claude Sonnet flow (job analysis, optional company search via Apify, gap/ATS, two tailored resume texts, prep, cover letter). Today the route **persists the combined result as JSON on a new `resume_versions` row** (`type: customized`), not incremental `analysis_sessions` sections. Re-running analysis creates another version row.
 
 4. **Company Intelligence** (`/api/company-intel/:name`): On-demand fetch (manual trigger or auto for top matches). Apify RAG browser fetches recent news → Claude Sonnet synthesizes into structured intel. Cached in `company_intel` table with 7-day TTL, shared across all jobs from the same company.
 
 5. **Application Tracking** (`/api/applications`): Manual or auto-detected applications. Every status change awards XP server-side and checks achievements; level = XP ÷ 100.
 
-6. **Vercel Cron** (`vercel.json`, `/api/cron/search`): Runs at 07:00 UTC daily. Validates `Authorization: Bearer CRON_SECRET` then triggers the search pipeline for each due search config.
+6. **Scheduled search (future)** — `app/api/cron/search/route.ts` + `vercel.json`: Code exists to call `POST /api/search/run` for due configs, but **scheduled cron is not treated as live in the current product phase** (focus is interactive search from the dashboard). When enabled: protect with `Authorization: Bearer CRON_SECRET`; align cron → `/api/search/run` auth with the same header contract.
 
 ## Key Directories
 
@@ -39,11 +39,11 @@ JobQuest is an AI-powered job application tracker built with Next.js App Router,
 - [app/api/jobs/manual/](app/api/jobs/manual/) — Manually pasted job ingestion endpoint
 - [app/api/company-intel/](app/api/company-intel/) — Company intelligence fetch + cache endpoint
 - [app/dashboard/](app/dashboard/) — Protected UI pages; guarded by `middleware.ts` which redirects unauthenticated requests to `/login`
-- [lib/apify/](lib/apify/) — Apify source wrappers (`sources.ts`), actor runner with polling (`search.ts`), parallel orchestration (`orchestrate.ts`), post-filter Workday description fetch (`descriptions.ts`)
+- [lib/apify/](lib/apify/) — Apify source wrappers (`sources.ts`), actor runner with polling (`search.ts`), parallel orchestration (`orchestrate.ts`), post-filter description enrichment (`descriptions.ts` — Workday, SmartRecruiters, Workable, Recruitee via rag-web-browser in batches of 3)
 - [lib/serp/](lib/serp/) — SerpAPI Google Jobs integration (`search.ts`, `normalize.ts`)
-- [lib/claude/](lib/claude/) — Haiku enricher (`enricher.ts`: 10 jobs/call), Sonnet scorer (`scorer.ts`: 5 jobs/call), Haiku dedup helper (`dedup.ts`: YES/NO only)
+- [lib/claude/](lib/claude/) — Haiku enricher (`enricher.ts`: 5 jobs/call batches), Sonnet scorer (`scorer.ts`: 5 jobs/call), Haiku dedup helper (`dedup.ts`: YES/NO only, unused at search time)
 - [lib/pipeline/](lib/pipeline/) — Shared pipeline orchestrator (`core.ts`), raw-to-canonical normalization with `country_code` inference (`normalize.ts`), 3-stage dedup split into `deduplicateEarly()` + `deduplicateFuzzy()` (`deduplicate.ts`)
-- [lib/context.ts](lib/context.ts) — `buildJobContext()`: shared data assembler for job detail panel + resume page
+- [lib/context.ts](lib/context.ts) — `buildJobContext()`: DB-only shared job payload (optional integration point)
 - [lib/xp.ts](lib/xp.ts) — XP award, level calculation, streak tracking, achievement unlocks
 - [lib/types.ts](lib/types.ts) — All shared TypeScript interfaces
 - [lib/supabase.ts](lib/supabase.ts) — Supabase client (anon for browser, admin/service key for server)
@@ -51,7 +51,7 @@ JobQuest is an AI-powered job application tracker built with Next.js App Router,
 
 ## Database (Supabase / PostgreSQL)
 
-Core tables: `users`, `jobs`, `job_sources`, `job_scores`, `applications`, `resume_versions`, `resumes`, `search_configs`, `search_runs`, `achievements`, `company_intel`, `analysis_sessions`.
+Core tables: `users`, `jobs`, `job_sources`, `job_scores`, `applications`, `resume_versions`, `resumes`, `search_configs`, `search_runs`, `achievements`, `company_intel`. (`analysis_sessions` may exist from migrations; resume analyze currently uses `resume_versions` for persisted output.)
 
 **Key columns added to `jobs` in v2:** `role_summary`, `skills_required` (text[]), `skills_preferred` (text[]), `tech_stack` (text[]), `work_mode`, `visa_sponsorship`, `experience_years_min`, `experience_years_max`, `education_level`, `security_clearance`, `benefits_highlights` (text[]), `languages_required` (text[]), `apply_url`, `enriched_at`, `sources_count`, `role_alignment`, `source`.
 
@@ -66,7 +66,7 @@ See `jobquest-search-architecture.md` for full schema and migration SQL.
 See [.env.example](.env.example). Required:
 - `NEXTAUTH_SECRET` — generate with `openssl rand -base64 32`
 - `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_ANON_KEY` + `SUPABASE_SERVICE_KEY`
-- `ANTHROPIC_API_KEY` — Claude (Haiku for enrichment/dedup, Sonnet for scoring/analysis/company intel)
+- `ANTHROPIC_API_KEY` — Claude (Sonnet for resume analysis/company intel — NOT used at search time)
 - `APIFY_TOKEN` — job scraping (LinkedIn, Indeed, ATS pages, career pages, PhD boards)
 - `SERPAPI_KEY` — Google Jobs aggregation via `google_jobs` engine. Toggle per search config via `serp_enabled` boolean. Offset pagination tracked via `serp_next_offset` (advances +10 per run, resets to 0 when `results < 10` or offset reaches `SERP_MAX_OFFSET = 50`).
 - `CRON_SECRET` — bearer token for `/api/cron/search`
@@ -74,38 +74,47 @@ See [.env.example](.env.example). Required:
 
 ## Claude Usage Patterns
 
-- **Job enrichment** (`lib/claude/enricher.ts`): Claude Haiku (`claude-haiku-4-5-20251001`), batches **10 jobs per call**. Extracts: `role_summary`, `skills_required`, `skills_preferred`, `tech_stack`, `work_mode`, `visa_sponsorship`, `apply_url`, `experience_years_min/max`, `education_level`, `security_clearance`, `benefits_highlights`, `languages_required`. Runs after location filter + Workday description fetch, before fuzzy dedup.
-- **Deduplication** (`lib/claude/dedup.ts`): Claude Haiku, Stage 3 only (after source ID and hash checks both fail). Responds YES/NO only.
-- **Job scoring** (`lib/claude/scorer.ts`): Claude Sonnet 4.6 (`claude-sonnet-4-6`), batches **5 jobs per call**. Uses enriched `skills_required` + `role_summary` (not raw description). Returns `fit_score` (0–100), `fit_reason`, `skills_matched`, `skills_missing`.
-- **Resume analysis** (`/api/resume/analyze`): Claude Sonnet 4.6. Always reads `analysis_sessions` first — only calls Claude for sections not yet stored.
-- **Company intel** (`/api/company-intel/:name`): Claude Sonnet 4.6 synthesizes Apify RAG results. Role alignment per job uses Haiku.
+Claude is **NOT called during the job search pipeline**. All search-time stages are free (DB lookups + in-memory logic).
+
+Claude is called **on-demand** only:
+- **Resume analysis** (`/api/resume/analyze`): Claude Sonnet (see route for model id). Full run each request; stores output on `resume_versions` (customized JSON blob), not section-by-section `analysis_sessions`.
+- **Company intel** (`/api/company-intel/:name`): Claude Sonnet 4.6 synthesizes Apify RAG results into structured intel (company layer cached 7 days, role layer per-job).
+- **Job enrichment** (`lib/claude/enricher.ts`): Claude Haiku — available for future on-demand enrichment per job. Not called at search time.
+- **Job scoring** (`lib/claude/scorer.ts`): Claude Sonnet 4.6 — available for future on-demand scoring. Not called at search time.
+- **Dedup** (`lib/claude/dedup.ts`): Claude Haiku — kept but no longer used. Fuzzy dedup is now free title-similarity.
 
 When adding Claude calls: use prompt caching where the system prompt or large context is reused across batches. Always batch — never call Claude once per job in a loop.
 
 ## Pipeline Stage Order
 
-Cost-optimised: free stages run first so Claude only processes jobs that are new and in the right location.
+All stages are free of Claude calls at search time.
 
 ```
 Scrape (Apify + SerpAPI in parallel)
   → Normalize (raw JSON → canonical schema + country_code inference)
   → Early Dedup — free (Stage 1: source job ID, Stage 2: SHA-256 hash)
   → Location Filter — free (ISO country_code exact match; REMOTE/MULTI always pass)
-  → Workday Description Fetch — Apify RAG browser, sequential, max 5/run (survivors only)
-  → Haiku Enrich (10 jobs/call — extract all structured fields from full JD text)
-  → Fuzzy Dedup — Haiku YES/NO (Stage 3, paid, only after enrichment)
-  → Sonnet Score (5 jobs/call — fit score vs active resume)
-  → Store (Supabase: jobs + job_sources + job_scores)
+  → Description Enrichment — rag-web-browser for sources with incomplete listings:
+      • Workday       (bulletFields[] only — React SPA needs Chromium render)
+      • SmartRecruiters (description always '' from listing API)
+      • Workable      (listing API returns snippet only)
+      • Recruitee     (conditional — only when description < 500 chars)
+      Processed in parallel batches of 3 (3 × 8192MB = 24GB, safe under Apify free 32GB)
+      LinkedIn/Indeed/Greenhouse/Lever/Ashby already return full descriptions — skip
+  → Fuzzy Dedup — free title-similarity check (same company + normalized title substring match)
+  → Store (Supabase: jobs + job_sources — no enriched fields, no scores)
   → Emit SSE complete event / update search_runs.progress
 ```
 
-Shared pipeline logic: `lib/pipeline/core.ts` (`runPipelineCore`). The SSE route (`app/api/search/stream/route.ts`) and cron runner (`lib/search/run-pipeline.ts`) are thin wrappers that pass a `ProgressCallback` and own their own lifecycle (SSE events / DB writes).
+Enrichment (Haiku) and scoring (Sonnet) are triggered on-demand per job from the detail panel.
+
+Shared pipeline logic: `lib/pipeline/core.ts` (`runPipelineCore`). The SSE route (`app/api/search/stream/route.ts`) and `lib/search/run-pipeline.ts` are thin wrappers that pass a `ProgressCallback` and own lifecycle (SSE / DB writes).
 
 ## UI Architecture
 
 The jobs page (`/jobs`) is a **full split-pane layout** — compact scrollable list on the left, detail panel on the right. There is no separate `/jobs/[id]` detail page. The right panel has exactly **two tabs: [Job Details] and [Company Intel]**. Manually pasted jobs appear in a separate "Manually Added" section at the bottom of the left pane.
 
-The Resume page uses `buildJobContext()` to load existing data before running any Claude calls. It does NOT re-run enrichment or scoring if the pipeline already computed those values. Deep analysis (gap, interview prep, cover letter, tailored resumes) runs on demand and is stored in `analysis_sessions`.
+The Resume page loads masters and past customized versions via `/api/resume/masters` and `/api/resume/versions`. **Analyze a Job** calls `/api/resume/analyze` and appends a new `resume_versions` row with the JSON result. Use `buildJobContext()` when you need a single server-side job+intel payload without duplicating Supabase queries.
 
 ## Resume File Storage
 

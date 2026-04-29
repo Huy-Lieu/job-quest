@@ -86,7 +86,12 @@ export default function JobsPage() {
   // ── Selection / delete ────────────────────────────────────────────────────────
 
   const toggleSelect = useCallback((id: string) => {
-    setSelectedIds((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n })
+    setSelectedIds((p) => {
+      const n = new Set(p)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
   }, [])
   const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
 
@@ -123,42 +128,68 @@ export default function JobsPage() {
 
   const runSearch = useCallback(async (configId: string, configName: string, opts?: { switchToRunsTab?: boolean }) => {
     setOptimisticRunningIds((p) => { const n = new Set(p); n.add(configId); return n })
-    const tid = toast.loading(`Running ${configName}…`, { description: 'Scraping in parallel. Usually 30–90 s.', duration: Infinity })
+    const tid = toast.loading(`Running ${configName}…`, { description: 'Scraping in parallel. Usually 10–30 s.', duration: Infinity })
+
+    const stageLabel: Record<string, string> = {
+      scraping:              'Scraping job boards…',
+      normalizing:           'Normalizing results…',
+      deduplicating:         'Removing duplicates…',
+      fetching_descriptions: 'Fetching full job descriptions…',
+      storing:               'Saving jobs…',
+    }
+
+    async function readStream(): Promise<boolean> {
+      try {
+        const res = await fetch('/api/search/stream', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ configId }),
+        })
+        if (!res.ok || !res.body) {
+          const d = await res.json().catch(() => ({}))
+          toast.error(`Search failed: ${(d as { error?: string }).error ?? 'Unknown error'}`, { id: tid, duration: 6000 })
+          return true // done, don't retry
+        }
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ''
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break
+          buf += dec.decode(value, { stream: true })
+          const lines = buf.split('\n'); buf = lines.pop() ?? ''
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            try {
+              const pl = JSON.parse(line.slice(6)) as { stage?: string; found?: number; unique?: number; jobsAdded?: number; message?: string }
+              if (pl.stage === 'complete') {
+                toast.success(`Done — ${pl.found ?? 0} found · ${pl.jobsAdded ?? 0} new`, { id: tid, duration: 5000 })
+                fetchJobs(0); fetchRuns(); if (opts?.switchToRunsTab) setTab('runs')
+                return true // done
+              }
+              if (pl.stage === 'cancelled') { toast.info('Search cancelled', { id: tid, duration: 3000 }); return true }
+              const label = stageLabel[pl.stage ?? ''] ?? pl.message ?? 'Running…'
+              toast.loading(label, { id: tid, duration: Infinity })
+            } catch { /* ignore parse errors */ }
+          }
+        }
+        // Stream ended without a complete event — connection dropped
+        return false
+      } catch {
+        return false // network error — may retry
+      }
+    }
+
     try {
-      const res = await fetch('/api/search/stream', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ configId }),
-      })
-      if (!res.ok || !res.body) {
-        const d = await res.json().catch(() => ({}))
-        toast.error(`Search failed: ${(d as { error?: string }).error ?? 'Unknown error'}`, { id: tid, duration: 6000 }); return
-      }
-      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ''
-      const stageLabel: Record<string, string> = {
-        scraping: 'Scraping job boards…', normalizing: 'Normalizing…',
-        enriching: 'Enriching with Claude…', deduplicating: 'Deduplicating…',
-        scoring: 'Scoring against your resume…',
-      }
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break
-        buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n'); buf = lines.pop() ?? ''
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          try {
-            const pl = JSON.parse(line.slice(6)) as { stage?: string; found?: number; unique?: number; scored?: number; message?: string }
-            if (pl.stage === 'complete') {
-              toast.success(`Done — ${pl.found ?? 0} found · ${pl.unique ?? 0} new · ${pl.scored ?? 0} scored`, { id: tid, duration: 5000 })
-              fetchJobs(0); fetchRuns(); if (opts?.switchToRunsTab) setTab('runs'); return
-            }
-            let label = stageLabel[pl.stage ?? ''] ?? pl.message ?? 'Running…'
-            if (pl.stage === 'enriching' && pl.found)  label = `Enriching ${pl.found} jobs…`
-            if (pl.stage === 'scoring'   && pl.unique) label = `Scoring ${pl.unique} jobs…`
-            toast.loading(label, { id: tid, duration: Infinity })
-          } catch { /* ignore */ }
+      const done = await readStream()
+      if (!done) {
+        // Option B: auto-reconnect once after 3s
+        toast.loading('Reconnecting…', { id: tid, duration: Infinity })
+        await new Promise(r => setTimeout(r, 3000))
+        const done2 = await readStream()
+        if (!done2) {
+          toast.error('Connection lost. Check Runs tab to see if the search completed.', { id: tid, duration: 8000 })
+          fetchRuns()
         }
       }
-    } catch { toast.error('Network error', { id: tid, duration: 6000 }) }
-    finally { setOptimisticRunningIds((p) => { const n = new Set(p); n.delete(configId); return n }) }
+    } finally {
+      setOptimisticRunningIds((p) => { const n = new Set(p); n.delete(configId); return n })
+    }
   }, [fetchJobs, fetchRuns])
 
   // ── Config helpers ────────────────────────────────────────────────────────────

@@ -3,7 +3,11 @@
 
 import type { SerpJobResult } from '@/lib/types'
 import type { NormalizedJob } from '@/lib/pipeline/normalize'
-import { inferCountryCode }   from '@/lib/pipeline/normalize'
+import {
+  inferCountryCode, cleanDescription,
+  extractVisa, extractClearance, extractWorkMode,
+  extractExpMin, extractExpMax, extractTechStack, extractBenefits,
+} from '@/lib/pipeline/normalize'
 
 const HOURS_PER_YEAR = 2080 // 40 hrs/week × 52 weeks
 
@@ -153,25 +157,33 @@ export function normalizeSerpJob(raw: SerpJobResult): NormalizedJob {
             ?? raw.share_link
             ?? ''
 
-  const salaryStr = ext.salary ?? ''
-
-  const location = raw.location ?? ''
+  const salaryStr   = ext.salary ?? ''
+  const location    = raw.location ?? ''
+  const description = cleanDescription(raw.description ?? '')
+  const detectedWorkMode = extractWorkMode(description)
 
   return {
-    canonical_title: raw.title.trim(),
-    company:         raw.company_name.trim(),
+    canonical_title:      raw.title.trim(),
+    company:              raw.company_name.trim(),
     location,
-    country_code:    inferCountryCode(location),
-    description:     raw.description ?? '',
-    salary_min:      parseSalaryMin(salaryStr),
-    salary_max:      parseSalaryMax(salaryStr),
-    salary_currency: 'USD',
-    job_type:        normalizeJobType(ext.schedule_type ?? ''),
-    employment_type: ext.work_from_home ? 'remote' : 'unknown',
-    posted_at:       parseSerpDate(ext.posted_at),
-    is_phd:          detectPhD(raw.title, raw.description),
-    raw_hash:        '',   // filled in by deduplicateJobs()
-    metadata:        {},
+    country_code:         inferCountryCode(location),
+    description,
+    salary_min:           parseSalaryMin(salaryStr),
+    salary_max:           parseSalaryMax(salaryStr),
+    salary_currency:      'USD',
+    job_type:             normalizeJobType(ext.schedule_type ?? ''),
+    employment_type:      detectedWorkMode ?? (ext.work_from_home ? 'remote' : 'unknown'),
+    posted_at:            parseSerpDate(ext.posted_at),
+    is_phd:               detectPhD(raw.title, raw.description),
+    raw_hash:             '',   // filled in by deduplicateJobs()
+    metadata:             {},
+    visa_sponsorship:     extractVisa(description),
+    security_clearance:   extractClearance(raw.title, description),
+    work_mode:            detectedWorkMode,
+    experience_years_min: extractExpMin(description),
+    experience_years_max: extractExpMax(description),
+    tech_stack:           extractTechStack(description),
+    benefits_highlights:  extractBenefits(description),
     source: {
       name:          'serp',
       url,

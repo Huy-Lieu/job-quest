@@ -239,6 +239,20 @@ export interface JobWithScore {
   application_deadline: string | null   // ISO date string
   // Per-level salary ranges (e.g. NVIDIA L4/L5). Single range stored in salary_min/max.
   salary_levels:        Array<{ level: string; min: number; max: number }> | null
+  // Per-job role-level company intel (synthesized by Claude Sonnet)
+  role_company_intel:   RoleCompanyIntel | null
+}
+
+export interface IntelSignal {
+  text:      string
+  sentiment: 'positive' | 'caution' | 'risk'
+}
+
+export interface RoleCompanyIntel {
+  walking_into:        IntelSignal[]
+  business_context:    IntelSignal[]
+  what_this_means:     IntelSignal[]
+  interview_narrative: string
 }
 
 export interface SearchConfig {
@@ -255,12 +269,13 @@ export interface SearchConfig {
   is_active:         boolean
   serp_enabled:      boolean
   serp_next_offset:  number
+  serp_query:        string | null  // override for Google Jobs query (max ~5 words); falls back to keywords[0..3]
   created_at:        string
 }
 
-/** Shape of the `search_runs.progress` JSONB column used for SSE polling fallback. */
+/** Shape of the `search_runs.progress` JSONB column used for SSE / polling fallback. */
 export interface SearchRunProgress {
-  stage?:    'scraping' | 'normalizing' | 'enriching' | 'deduplicating' | 'scoring' | 'complete'
+  stage?:    'scraping' | 'normalizing' | 'deduplicating' | 'fetching_descriptions' | 'storing' | 'complete'
   found?:    number
   enriched?: number
   unique?:   number

@@ -1,6 +1,20 @@
 // app/api/company-intel/[name]/route.ts
-// On-demand company intelligence: check cache → Apify RAG fetch → Claude Sonnet synthesis
-// Also writes role_alignment to jobs.role_alignment for the requesting job (if jobId provided).
+// On-demand company intelligence: check cache -> 3x Apify queries -> Sonnet synthesis (2 layers)
+//
+// Layer 1 (company, cached 7 days, shared across all jobs from same company):
+//   company_snapshot, strategic_direction, leadership_culture, hiring_signals, red_flags
+//   Stored in: company_intel table
+//
+// Layer 2 (role, per-job, stored in jobs.role_company_intel):
+//   walking_into, business_context, what_this_means, interview_narrative
+//   Requires: company context + role_summary + canonical_title
+//
+// role_alignment (1-2 sentence hook) stays in jobs.role_alignment (written by Haiku).
+//
+// Apify queries fired in parallel:
+//   1. strategy + revenue + roadmap + risks (feeds strategic direction, snapshot, red flags)
+//   2. engineering culture + team + how we work (feeds leadership/culture, walking_into)
+//   3. hiring patterns + team expansion + roles (feeds hiring signals)
 
 import { NextResponse }    from 'next/server'
 import { getServerSession } from 'next-auth'
@@ -11,87 +25,168 @@ import { runApifyActor }   from '@/lib/apify/search'
 
 const client = new Anthropic()
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Claude prompts
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Shared system prompts
+// -----------------------------------------------------------------------------
 
-const INTEL_SYSTEM_PROMPT = `You are a senior business analyst specializing in technology companies. You synthesize recent news and public signals into concise, candidate-relevant intelligence.
+const COMPANY_SYSTEM_PROMPT = `You are a senior business analyst writing a candidate briefing memo for a job seeker. Synthesize recent web search results into structured, actionable company intelligence.
 
-Your output is used by job seekers to decide whether a company is a good fit and to prepare for interviews. Be factual and specific — never hallucinate financials, headcount, or product details. When information is absent or unclear, say so rather than filling in with assumptions.
+Rules:
+- Be factual and specific. Reference actual news items where possible.
+- Never hallucinate financials, headcount, or product details.
+- When information is absent, use null or empty array — never fill in with assumptions.
+- Each signal must include a "sentiment" field: "positive", "caution", or "risk".
+- Write in present tense. Be direct. No marketing language.
+- Respond only with valid JSON matching the schema. No markdown fences, no preamble.`
 
-Respond only with valid JSON matching the schema provided. No markdown fences, no preamble.`
+const ROLE_SYSTEM_PROMPT = `You are a career advisor writing a targeted briefing for a candidate interviewing at a company. Given the company's strategic context and this specific role, produce four sections of actionable interview-prep intelligence.
 
-const ROLE_ALIGNMENT_SYSTEM_PROMPT = `You are a career advisor helping a candidate understand how a specific role connects to a company's current strategic direction. Write in second person ("This role..."). Be concise and specific — 1–2 sentences maximum. Do not restate the job title or company name in the output.`
+Rules:
+- Write in second person where natural ("You're walking into...", "This role sits at...").
+- Be specific and opinionated — vague generalities are useless to a candidate.
+- Each signal must include a "sentiment" field: "positive", "caution", or "risk".
+- Keep each bullet to 1–2 sentences maximum.
+- Respond only with valid JSON matching the schema. No markdown fences, no preamble.`
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Apify RAG helper
-// ─────────────────────────────────────────────────────────────────────────────
+const ROLE_ALIGNMENT_SYSTEM_PROMPT = `You are a career advisor. Write 1–2 sentences explaining how a specific role connects to a company's current strategic direction. Second person ("This role..."). No restating the job title or company name.`
 
-async function fetchCompanyNews(companyName: string): Promise<string> {
-  try {
-    const query = `${companyName} company news strategy hiring 2024 2025`
-    const results = await runApifyActor(
+// -----------------------------------------------------------------------------
+// Apify helpers — 3 parallel targeted queries
+// -----------------------------------------------------------------------------
+
+function formatResults(results: unknown[]): string {
+  if (!results || results.length === 0) return 'No results found.'
+  return results
+    .slice(0, 4)
+    .map((r, i) => {
+      const rec  = r as Record<string, unknown>
+      const meta = rec.metadata as Record<string, unknown> | undefined
+      const title   = (meta?.title as string | undefined) ?? (rec.url as string | undefined) ?? `Result ${i + 1}`
+      const content = (rec.markdown as string | undefined)?.slice(0, 500)?.replace(/\n+/g, ' ')
+        ?? (meta?.description as string | undefined)
+        ?? ''
+      return `[${i + 1}] ${title}\n${content}`
+    })
+    .join('\n\n')
+}
+
+async function fetchCompanyIntelSources(companyName: string): Promise<{
+  strategyNews:   string
+  cultureNews:    string
+  hiringNews:     string
+}> {
+  const [strategy, culture, hiring] = await Promise.allSettled([
+    runApifyActor(
       'apify/rag-web-browser',
-      { query, maxResults: 6, outputFormats: ['markdown'] },
+      { query: `${companyName} strategy revenue product roadmap risks 2025 2026`, maxResults: 4, outputFormats: ['markdown'] },
       50_000
-    )
+    ),
+    runApifyActor(
+      'apify/rag-web-browser',
+      { query: `${companyName} engineering culture team structure how we work employee review`, maxResults: 4, outputFormats: ['markdown'] },
+      50_000
+    ),
+    runApifyActor(
+      'apify/rag-web-browser',
+      { query: `${companyName} hiring expansion team growth jobs 2025 2026`, maxResults: 4, outputFormats: ['markdown'] },
+      50_000
+    ),
+  ])
 
-    if (!results || results.length === 0) return 'No recent news found.'
-
-    return results
-      .slice(0, 6)
-      .map((r: Record<string, unknown>, i: number) => {
-        const meta    = r.metadata as Record<string, unknown> | undefined
-        const title   = (meta?.title as string | undefined) ?? (r.url as string | undefined) ?? `Result ${i + 1}`
-        const content = (r.markdown as string | undefined)?.slice(0, 600)?.replace(/\n+/g, ' ')
-          ?? (meta?.description as string | undefined)
-          ?? ''
-        return `[${i + 1}] ${title}\n${content}`
-      })
-      .join('\n\n')
-  } catch {
-    return 'Company search unavailable — Apify actor timed out or failed.'
+  return {
+    strategyNews: strategy.status === 'fulfilled' ? formatResults(strategy.value) : 'Unavailable.',
+    cultureNews:  culture.status  === 'fulfilled' ? formatResults(culture.value)  : 'Unavailable.',
+    hiringNews:   hiring.status   === 'fulfilled' ? formatResults(hiring.value)   : 'Unavailable.',
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Claude Sonnet — synthesize raw news into structured intel
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Interfaces
+// -----------------------------------------------------------------------------
 
-interface CompanyIntelResult {
-  summary:            string
-  recent_news:        string[]
-  strategic_direction: string
-  hiring_signals:     string[]
-  red_flags:          string[]
+interface Signal {
+  text:      string
+  sentiment: 'positive' | 'caution' | 'risk'
 }
 
-async function synthesizeIntel(
+interface CompanyIntelResult {
+  company_snapshot:    {
+    stage:        string | null
+    headcount:    string | null
+    revenue:      string | null
+    core_business: string | null
+    key_products: string | null
+  }
+  strategic_direction: Signal[]
+  leadership_culture:  Signal[]
+  hiring_signals:      Signal[]
+  red_flags:           Signal[]
+}
+
+export interface RoleCompanyIntel {
+  walking_into:       Signal[]
+  business_context:   Signal[]
+  what_this_means:    Signal[]
+  interview_narrative: string
+}
+
+// -----------------------------------------------------------------------------
+// Claude Sonnet — Layer 1: company-level intel
+// -----------------------------------------------------------------------------
+
+async function synthesizeCompanyIntel(
   companyName: string,
-  rawNews: string
+  strategyNews: string,
+  cultureNews:  string,
+  hiringNews:   string
 ): Promise<CompanyIntelResult> {
   const userPrompt = `Company: ${companyName}
 
-Recent web search results:
-${rawNews}
+=== Strategy / Revenue / Roadmap / Risks ===
+${strategyNews}
 
-Extract and synthesize the above into the following JSON object. Be specific and evidence-based — reference actual news items where possible.
+=== Engineering Culture / Team Structure ===
+${cultureNews}
+
+=== Hiring / Team Expansion ===
+${hiringNews}
+
+Synthesize the above into this JSON object. Each signal array item must have "text" (1–2 sentence string) and "sentiment" ("positive", "caution", or "risk").
 
 {
-  "summary": "2–3 sentence company overview: what they do, current stage/scale, and one notable recent development",
-  "recent_news": ["Up to 4 bullet strings summarizing notable recent events (funding, product launches, layoffs, acquisitions, leadership changes, etc.)"],
-  "strategic_direction": "1–2 sentences on where the company is heading — growth areas, key bets, or stated priorities",
-  "hiring_signals": ["Up to 3 bullet strings on hiring momentum or patterns visible from the news (e.g. 'Expanding ML team after Series C', 'Opening APAC offices Q1 2025')"],
-  "red_flags": ["Up to 3 bullet strings on any concerning signals (layoffs, leadership exits, slowing growth, regulatory issues). Empty array if none found."]
-}`
+  "company_snapshot": {
+    "stage": "e.g. Public · NYSE: NVDA",
+    "headcount": "e.g. ~32,000 employees",
+    "revenue": "e.g. $96B TTM, +122% YoY — or null if unknown",
+    "core_business": "1 sentence describing what the company does",
+    "key_products": "comma-separated list of flagship products/platforms"
+  },
+  "strategic_direction": [
+    { "text": "...", "sentiment": "positive|caution|risk" }
+  ],
+  "leadership_culture": [
+    { "text": "...", "sentiment": "positive|caution|risk" }
+  ],
+  "hiring_signals": [
+    { "text": "...", "sentiment": "positive|caution|risk" }
+  ],
+  "red_flags": [
+    { "text": "...", "sentiment": "risk" }
+  ]
+}
+
+strategic_direction: up to 3 signals on where the company is heading.
+leadership_culture: up to 3 signals on engineering culture, management style, team norms.
+hiring_signals: up to 3 signals on hiring momentum or role patterns.
+red_flags: up to 3 signals on layoffs, exits, regulatory issues, competitive threats. Empty array if none.`
 
   const response = await client.messages.create({
     model:      'claude-sonnet-4-6',
-    max_tokens: 1024,
+    max_tokens: 1500,
     system: [
       {
         type:          'text',
-        text:          INTEL_SYSTEM_PROMPT,
+        text:          COMPANY_SYSTEM_PROMPT,
         cache_control: { type: 'ephemeral' },
       } as Anthropic.TextBlockParam & { cache_control: { type: 'ephemeral' } },
     ],
@@ -99,24 +194,87 @@ Extract and synthesize the above into the following JSON object. Be specific and
   })
 
   const raw = response.content[0]?.type === 'text' ? response.content[0].text : '{}'
-
   try {
     return JSON.parse(raw) as CompanyIntelResult
   } catch {
-    // Fallback if parse fails
     return {
-      summary:             `${companyName} — intel synthesis failed. Raw data unavailable.`,
-      recent_news:         [],
-      strategic_direction: '',
+      company_snapshot:    { stage: null, headcount: null, revenue: null, core_business: companyName, key_products: null },
+      strategic_direction: [],
+      leadership_culture:  [],
       hiring_signals:      [],
       red_flags:           [],
     }
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Claude Haiku — role alignment (per-job, written to jobs.role_alignment)
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
+// Claude Sonnet — Layer 2: role-level intel
+// -----------------------------------------------------------------------------
+
+async function synthesizeRoleIntel(
+  jobTitle:     string,
+  roleSummary:  string | null,
+  companyIntel: CompanyIntelResult
+): Promise<RoleCompanyIntel> {
+  const userPrompt = `Role: ${jobTitle}
+Role summary: ${roleSummary ?? '(not available)'}
+
+Company context:
+- Core business: ${companyIntel.company_snapshot.core_business ?? ''}
+- Strategic direction: ${companyIntel.strategic_direction.map(s => s.text).join(' | ')}
+- Culture signals: ${companyIntel.leadership_culture.map(s => s.text).join(' | ')}
+- Hiring signals: ${companyIntel.hiring_signals.map(s => s.text).join(' | ')}
+- Red flags: ${companyIntel.red_flags.map(s => s.text).join(' | ') || 'None identified'}
+
+Produce the following JSON for a candidate preparing to interview for this specific role:
+
+{
+  "walking_into": [
+    { "text": "...", "sentiment": "positive|caution|risk" }
+  ],
+  "business_context": [
+    { "text": "...", "sentiment": "positive|caution|risk" }
+  ],
+  "what_this_means": [
+    { "text": "...", "sentiment": "positive|caution|risk" }
+  ],
+  "interview_narrative": "2–3 sentence paragraph. What angle should the candidate take in their interviews? What story connects their background to this company's current priorities? Be specific and direct."
+}
+
+walking_into: up to 3 signals about the immediate team environment, delivery pressure, org dynamics — things the candidate needs to know before day 1.
+business_context: up to 2 signals explaining why this specific role matters to the company's current strategy or revenue.
+what_this_means: up to 3 signals with a personal read for the candidate — career upside, comp considerations, risk/reward.
+interview_narrative: the recommended interview angle in 2–3 sentences.`
+
+  const response = await client.messages.create({
+    model:      'claude-sonnet-4-6',
+    max_tokens: 800,
+    system: [
+      {
+        type:          'text',
+        text:          ROLE_SYSTEM_PROMPT,
+        cache_control: { type: 'ephemeral' },
+      } as Anthropic.TextBlockParam & { cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{ role: 'user', content: userPrompt }],
+  })
+
+  const raw = response.content[0]?.type === 'text' ? response.content[0].text : '{}'
+  try {
+    return JSON.parse(raw) as RoleCompanyIntel
+  } catch {
+    return {
+      walking_into:        [],
+      business_context:    [],
+      what_this_means:     [],
+      interview_narrative: '',
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Claude Haiku — role alignment (1-2 sentence hook, existing behaviour)
+// -----------------------------------------------------------------------------
 
 async function computeRoleAlignment(
   jobTitle:           string,
@@ -129,7 +287,7 @@ async function computeRoleAlignment(
 Role summary: ${roleSummary ?? '(not available)'}
 Company strategic direction: ${strategicDirection}
 
-Write 1–2 sentences explaining how this specific role connects to or enables the company's current strategic direction.`
+Write 1-2 sentences explaining how this specific role connects to or enables the company's current strategic direction.`
 
   try {
     const response = await client.messages.create({
@@ -150,29 +308,29 @@ Write 1–2 sentences explaining how this specific role connects to or enables t
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 // Route handler
-// ─────────────────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------------------
 
 export async function POST(
   request: Request,
-  { params }: { params: { name: string } }
+  { params }: { params: Promise<{ name: string }> }
 ) {
   const session = await getServerSession(authOptions)
   if (!session?.user?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const companyName = decodeURIComponent(params.name)
+  const { name } = await params
+  const companyName = decodeURIComponent(name)
   if (!companyName) {
     return NextResponse.json({ error: 'Company name is required' }, { status: 400 })
   }
 
-  // Optional jobId — if provided, we'll also write role_alignment to that job row
-  const body = await request.json().catch(() => ({}))
+  const body  = await request.json().catch(() => ({}))
   const jobId: string | null = body.jobId ?? null
 
-  // ── 1. Check cache (7-day TTL) ────────────────────────────────────────────
+  // 1. Check company-layer cache (7-day TTL)
   const { data: cached } = await supabaseAdmin
     .from('company_intel')
     .select('*')
@@ -181,11 +339,12 @@ export async function POST(
     .single()
 
   let intel = cached
+  let companyResult: CompanyIntelResult | null = null
 
   if (!intel) {
-    // ── 2. Fetch fresh data via Apify + synthesize with Claude Sonnet ────────
-    const rawNews    = await fetchCompanyNews(companyName)
-    const structured = await synthesizeIntel(companyName, rawNews)
+    // 2. Fetch from 3 parallel Apify queries
+    const { strategyNews, cultureNews, hiringNews } = await fetchCompanyIntelSources(companyName)
+    companyResult = await synthesizeCompanyIntel(companyName, strategyNews, cultureNews, hiringNews)
 
     const now       = new Date()
     const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
@@ -195,12 +354,14 @@ export async function POST(
       .upsert(
         {
           company_name:        companyName,
-          summary:             structured.summary,
-          recent_news:         structured.recent_news,
-          strategic_direction: structured.strategic_direction,
-          hiring_signals:      structured.hiring_signals,
-          red_flags:           structured.red_flags,
-          raw_data:            rawNews,
+          summary:             companyResult.company_snapshot.core_business ?? companyName,
+          recent_news:         [],
+          strategic_direction: companyResult.strategic_direction.map(s => s.text).join(' '),
+          hiring_signals:      JSON.stringify(companyResult.hiring_signals),
+          red_flags:           JSON.stringify(companyResult.red_flags),
+          company_snapshot:    companyResult.company_snapshot,
+          strategic_signals:   companyResult.strategic_direction,
+          leadership_culture:  companyResult.leadership_culture,
           fetched_at:          now.toISOString(),
           expires_at:          expiresAt.toISOString(),
         },
@@ -215,37 +376,63 @@ export async function POST(
     }
 
     intel = upserted
+  } else {
+    // Reconstruct companyResult from cached row for role synthesis
+    companyResult = {
+      company_snapshot:    intel.company_snapshot ?? { stage: null, headcount: null, revenue: null, core_business: companyName, key_products: null },
+      strategic_direction: intel.strategic_signals ?? [],
+      leadership_culture:  intel.leadership_culture ?? [],
+      hiring_signals:      typeof intel.hiring_signals === 'string'
+        ? tryParseSignals(intel.hiring_signals)
+        : (intel.hiring_signals ?? []),
+      red_flags:           typeof intel.red_flags === 'string'
+        ? tryParseSignals(intel.red_flags)
+        : (intel.red_flags ?? []),
+    }
   }
 
-  // ── 3. Compute & store role_alignment for this specific job ──────────────
-  if (jobId && intel?.strategic_direction) {
-    // Load the job to get title + role_summary
+  // 3. Role-layer intel (per-job)
+  if (jobId) {
     const { data: job } = await supabaseAdmin
       .from('jobs')
-      .select('canonical_title, role_summary, role_alignment')
+      .select('canonical_title, role_summary, role_alignment, role_company_intel')
       .eq('id', jobId)
       .single()
 
-    // Only recompute if not already set
-    if (job && !job.role_alignment) {
-      const alignment = await computeRoleAlignment(
-        job.canonical_title,
-        job.role_summary,
-        intel.strategic_direction
-      )
-      if (alignment) {
+    if (job) {
+      // Role alignment (Haiku)
+      if (!job.role_alignment) {
+        const strategicText = companyResult.strategic_direction.map((s: Signal) => s.text).join('. ')
+        const alignment = await computeRoleAlignment(job.canonical_title, job.role_summary, strategicText)
+        if (alignment) {
+          await supabaseAdmin.from('jobs').update({ role_alignment: alignment }).eq('id', jobId)
+          intel = { ...intel, role_alignment: alignment }
+        }
+      } else {
+        intel = { ...intel, role_alignment: job.role_alignment }
+      }
+
+      // Role intel (Sonnet)
+      if (!job.role_company_intel && companyResult) {
+        const roleIntel = await synthesizeRoleIntel(
+          job.canonical_title,
+          job.role_summary,
+          companyResult
+        )
         await supabaseAdmin
           .from('jobs')
-          .update({ role_alignment: alignment })
+          .update({ role_company_intel: roleIntel })
           .eq('id', jobId)
-
-        // Attach to response so the UI can render it immediately
-        intel = { ...intel, role_alignment: alignment }
+        intel = { ...intel, role_company_intel: roleIntel }
+      } else if (job.role_company_intel) {
+        intel = { ...intel, role_company_intel: job.role_company_intel }
       }
-    } else if (job?.role_alignment) {
-      intel = { ...intel, role_alignment: job.role_alignment }
     }
   }
 
   return NextResponse.json({ intel })
+}
+
+function tryParseSignals(v: string): Signal[] {
+  try { return JSON.parse(v) as Signal[] } catch { return [] }
 }

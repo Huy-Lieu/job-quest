@@ -4,20 +4,28 @@
 import type { JobMetadata, RawApifyJob } from '@/lib/types'
 
 export interface NormalizedJob {
-  canonical_title:  string
-  company:          string
-  location:         string
-  country_code:     string   // ISO 3166-1 alpha-2 e.g. "US", "IL", "DE" — or "REMOTE" / "UNKNOWN"
-  description:      string
-  salary_min:       number | null
-  salary_max:       number | null
-  salary_currency:  string
-  job_type:         string   // full_time | contract | part_time | internship
-  employment_type:  string   // remote | hybrid | on-site
-  posted_at:        string | null
-  is_phd:           boolean
-  raw_hash:         string   // populated by deduplication layer
-  metadata:         JobMetadata
+  canonical_title:      string
+  company:              string
+  location:             string
+  country_code:         string   // ISO 3166-1 alpha-2 e.g. "US", "IL", "DE" — or "REMOTE" / "UNKNOWN"
+  description:          string
+  salary_min:           number | null
+  salary_max:           number | null
+  salary_currency:      string
+  job_type:             string   // full_time | contract | part_time | internship
+  employment_type:      string   // remote | hybrid | on-site
+  posted_at:            string | null
+  is_phd:               boolean
+  raw_hash:             string   // populated by deduplication layer
+  metadata:             JobMetadata
+  // ── free extractors (no Claude) ──────────────────────────────────────────
+  visa_sponsorship:     'yes' | 'no' | 'unknown'
+  security_clearance:   'none' | 'preferred' | 'required'
+  work_mode:            'remote' | 'hybrid' | 'on-site' | null   // overrides scraped employment_type when detected
+  experience_years_min: number | null
+  experience_years_max: number | null
+  tech_stack:           string[]
+  benefits_highlights:  string[]
   source: {
     name:          string
     url:           string
@@ -42,7 +50,7 @@ function firstStr(...candidates: unknown[]): string {
 export function normalizeJob(raw: RawApifyJob, sourceName: string): NormalizedJob {
   const title       = cleanTitle(firstStr(raw.title, raw.jobTitle, raw.name))
   const company     = cleanCompany(firstStr(raw.company, raw.companyName, raw.employer))
-  const description = firstStr(raw.description, raw.markdown, raw.text)
+  const description = cleanDescription(firstStr(raw.description, raw.markdown, raw.text))
   const url         = firstStr(raw.url, raw.jobUrl, raw.applyUrl, raw.link)
   const salaryRaw   = firstStr(raw.salary, raw.salaryRange, raw.salary_range, raw.compensation)
 
@@ -68,24 +76,35 @@ export function normalizeJob(raw: RawApifyJob, sourceName: string): NormalizedJo
     if (urlCountry) country_code = urlCountry
   }
 
+  // ── Free extractors — all run on the cleaned description, zero cost ─────────
+  const scrapedWorkMode = normalizeWorkMode(firstStr(raw.workplaceType, raw.remote))
+  const detectedWorkMode = extractWorkMode(description)
+
   return {
-    canonical_title: title,
+    canonical_title:      title,
     company,
     location,
     country_code,
     description,
     salary_min,
     salary_max,
-    salary_currency: 'USD',
-    job_type:        normalizeJobType(firstStr(raw.employmentType, raw.jobType)),
-    employment_type: normalizeWorkMode(firstStr(raw.workplaceType, raw.remote)),
-    posted_at:       parsePostedDate(firstStr(
+    salary_currency:      'USD',
+    job_type:             normalizeJobType(firstStr(raw.employmentType, raw.jobType)),
+    employment_type:      detectedWorkMode ?? scrapedWorkMode,
+    posted_at:            parsePostedDate(firstStr(
       raw.postedAt, raw.datePosted, raw.date, raw.posted_on, raw.published_on,
       raw.postedTime, raw.pubDate, raw.listedAt, raw.postedOn, raw.releasedDate, raw.first_published, raw.updated_at
     )),
-    is_phd:          detectPhD(title, description),
-    raw_hash:        '',   // filled in by deduplicateJobs()
-    metadata:        buildMetadata(title, description, raw),
+    is_phd:               detectPhD(title, description),
+    raw_hash:             '',   // filled in by deduplicateJobs()
+    metadata:             buildMetadata(title, description, raw),
+    visa_sponsorship:     extractVisa(description),
+    security_clearance:   extractClearance(title, description),
+    work_mode:            detectedWorkMode,
+    experience_years_min: extractExpMin(description),
+    experience_years_max: extractExpMax(description),
+    tech_stack:           extractTechStack(description),
+    benefits_highlights:  extractBenefits(description),
     source: {
       name:          sourceName,
       url,
@@ -283,6 +302,250 @@ function cleanCompany(name: string): string {
   return name.trim().replace(/\s+/g, ' ')
 }
 
+// ── Free extractors ──────────────────────────────────────────────────────────
+// All run on the cleaned description text. Zero cost — no Claude calls.
+
+/**
+ * Detect visa sponsorship signal from job description.
+ * Returns 'yes' | 'no' | 'unknown'.
+ */
+export function extractVisa(text: string): 'yes' | 'no' | 'unknown' {
+  const t = text.toLowerCase()
+  if (
+    /does not (offer|provide|support) (visa )?sponsor|sponsorship (is )?(not available|not provided|unavailable)|must be (authorized|eligible|permitted) to work|no (visa )?sponsorship|cannot sponsor|not able to sponsor|work authorization required|us citizens? (only|required)|u\.s\. citizens?hip required|sponsorship not available/.test(t)
+  ) return 'no'
+  if (
+    /(will|can|able to|does) (offer|provide|support) (visa )?sponsor|h-?1b (sponsor|transfer)|visa sponsorship (is )?(available|provided|offered)|we (will )?sponsor|sponsorship (is )?available|open to sponsoring/.test(t)
+  ) return 'yes'
+  return 'unknown'
+}
+
+/**
+ * Detect security clearance requirement from title + description.
+ * Returns 'required' | 'preferred' | 'none'.
+ */
+export function extractClearance(title: string, text: string): 'required' | 'preferred' | 'none' {
+  const t = `${title} ${text}`.toLowerCase()
+  if (
+    /ts\/sci|top secret\/sci|active (secret|ts) clearance|clearance required|must hold.*clearance|must have.*clearance|clearance (is )?required|dod secret|dod clearance|secret clearance required|sensitive compartmented/.test(t)
+  ) return 'required'
+  if (
+    /clearance preferred|clearance (is a )?plus|clearance (is )?desired|secret preferred|ability to obtain.*clearance|eligible for.*clearance/.test(t)
+  ) return 'preferred'
+  return 'none'
+}
+
+/**
+ * Detect work mode from description text.
+ * Returns 'remote' | 'hybrid' | 'on-site' | null (null = no signal, keep scraped value).
+ */
+export function extractWorkMode(text: string): 'remote' | 'hybrid' | 'on-site' | null {
+  const t = text.toLowerCase()
+  if (/fully remote|100% remote|remote.first|remote first|work from anywhere|work from home\b|wfh\b/.test(t)) return 'remote'
+  if (
+    /hybrid.*(\d\s*day|\d\+?\s*day|few day|some day)|(\d\s*day|\d\+?\s*day) (in.?office|on.?site|in office)|remote.?hybrid|hybrid.?remote|flexible.*office|days? (in|on).?site per week/.test(t)
+  ) return 'hybrid'
+  if (
+    /\bon.?site\b|\bin.?office\b|in.person\b|must be (located|based|present)|relocation required|office.?based\b|required to be on.?site/.test(t)
+  ) return 'on-site'
+  return null
+}
+
+/**
+ * Extract minimum years of experience from description.
+ * Handles "5+ years", "at least 3 years", "3-7 years" (takes the lower bound).
+ */
+export function extractExpMin(text: string): number | null {
+  // Range first: "3-7 years", "3 to 7 years"
+  const range = text.match(/\b(\d{1,2})\+?\s*(?:[-–]|to)\s*\d{1,2}\+?\s*(?:years?|yrs?)\b/i)
+  if (range) return parseInt(range[1], 10)
+  // Qualified minimum: "at least 5 years", "minimum 3 years", "requires 7+ years"
+  const qualified = text.match(
+    /\b(?:at\s+least|minimum\s+of?|min\.?|requires?)\s+(\d{1,2})\+?\s*(?:years?|yrs?)\b/i
+  )
+  if (qualified) return parseInt(qualified[1], 10)
+  // Plain "5+ years [of experience]"
+  const plain = text.match(/\b(\d{1,2})\+\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp\.?)?\b/i)
+  if (plain) return parseInt(plain[1], 10)
+  return null
+}
+
+/**
+ * Extract maximum years of experience from description.
+ * Only populated for explicit ranges like "3-7 years". Returns null otherwise.
+ */
+export function extractExpMax(text: string): number | null {
+  const range = text.match(/\b\d{1,2}\+?\s*(?:[-–]|to)\s*(\d{1,2})\+?\s*(?:years?|yrs?)\b/i)
+  return range ? parseInt(range[1], 10) : null
+}
+
+/**
+ * Extract tech stack keywords from description.
+ * Uses a curated keyword list covering languages, frameworks, infra, EDA tools, and protocols.
+ * Returns matched keywords in lower-case, deduplicated.
+ */
+const TECH_KEYWORDS: string[] = [
+  // Languages
+  'python', 'javascript', 'typescript', 'java', 'c++', 'c#', 'golang', 'go', 'rust',
+  'swift', 'kotlin', 'ruby', 'scala', 'r', 'matlab', 'bash', 'powershell',
+  // HDL
+  'verilog', 'vhdl', 'systemverilog', 'uvm', 'rtl',
+  // Frameworks / libs
+  'react', 'next.js', 'vue', 'angular', 'django', 'flask', 'fastapi', 'spring',
+  'node.js', '.net', 'pytorch', 'tensorflow', 'keras', 'scikit-learn', 'pandas', 'numpy',
+  // Cloud / infra
+  'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'terraform', 'ansible',
+  'jenkins', 'github actions', 'ci/cd', 'gitlab', 'argocd', 'helm',
+  // Databases
+  'postgresql', 'mysql', 'mongodb', 'redis', 'elasticsearch', 'snowflake',
+  'bigquery', 'sqlite', 'dynamodb', 'cassandra',
+  // EDA / FPGA tools
+  'fpga', 'xilinx', 'intel fpga', 'altera', 'vivado', 'quartus', 'cadence',
+  'synopsys', 'mentor', 'vcs', 'questa', 'xcelium', 'spice', 'hspice',
+  'virtuoso', 'innovus', 'genus', 'primetime', 'calibre',
+  // Protocols / buses
+  'can bus', 'lin', 'spi', 'i2c', 'uart', 'pcie', 'usb', 'ethernet',
+  'axi', 'ahb', 'apb', 'jtag', 'ble', 'bluetooth', 'wifi', '5g', 'lte',
+  // Other tools
+  'git', 'linux', 'jira', 'confluence', 'figma', 'tableau', 'powerbi', 'airflow',
+]
+
+export function extractTechStack(text: string): string[] {
+  const t = text.toLowerCase()
+  const seen = new Set<string>()
+  for (const kw of TECH_KEYWORDS) {
+    const escaped = kw.replace(/[.+]/g, '\\$&')
+    if (new RegExp(`\\b${escaped}\\b`).test(t) && !seen.has(kw)) {
+      seen.add(kw)
+    }
+  }
+  return [...seen]
+}
+
+/**
+ * Extract benefits highlights from description text.
+ * Checks for explicit benefit signals and returns a deduplicated label list.
+ * "Unlimited PTO" takes priority over generic "PTO" to avoid double-tagging.
+ */
+const BENEFIT_RULES: Array<[RegExp, string]> = [
+  [/\b401k\b|\b401\(k\)/i,                                         '401k'],
+  [/equity|rsu\b|stock options?|esop\b/i,                          'Equity/RSUs'],
+  [/signing bonus|sign-?on bonus/i,                                'Signing bonus'],
+  [/unlimited pto|open pto|flexible pto|unlimited vacation/i,      'Unlimited PTO'],
+  [/\bpto\b|paid time off|\bvacation days?\b/i,                    'PTO'],
+  [/health insurance|medical.*dental|dental.*vision|healthcare/i,  'Health insurance'],
+  [/parental leave|maternity|paternity/i,                          'Parental leave'],
+  [/relocation( assistance)?/i,                                    'Relocation'],
+  [/tuition|education reimbursement|learning.*budget/i,            'Education budget'],
+  [/home office (stipend|allowance|budget)|office stipend/i,       'Home office stipend'],
+  [/gym|wellness (benefit|program|stipend)|fitness/i,              'Wellness benefit'],
+  [/catered (lunch|meal)|free (lunch|food|meals)/i,                'Free meals'],
+]
+
+export function extractBenefits(text: string): string[] {
+  const results: string[] = []
+  let hasUnlimitedPTO = false
+  for (const [rx, label] of BENEFIT_RULES) {
+    if (rx.test(text)) {
+      if (label === 'Unlimited PTO') hasUnlimitedPTO = true
+      // Skip generic PTO if unlimited PTO already matched
+      if (label === 'PTO' && hasUnlimitedPTO) continue
+      results.push(label)
+    }
+  }
+  return results
+}
+
+// ── Section-header regex shared by cleanDescription ───────────────────────────
+// When LinkedIn/Indeed collapse the JD into one paragraph, sentence endings
+// followed by a known header keyword need a newline injected so the renderer
+// can display them as section titles.
+const SECTION_HEADER_RE =
+  /^(what you[''']ll be doing|what we need to see|what we[''']re looking for|ways to stand out from the crowd|ways to stand out|about the role|about the team|about you|responsibilities|key responsibilities|requirements|qualifications|preferred qualifications|minimum qualifications|basic qualifications|additional qualifications|nice to have|bonus points|benefits|compensation|who you are|the role|your role|your impact|your background|your qualifications|what you will do|what you[''']ll do|what you bring|what you[''']ll bring|you will|you have|you are|we offer|we provide|the team|our team|what we offer|why join us|what makes this role exciting|location|the opportunity|who we are|your day to day|day to day|you[''']ll be responsible for|core responsibilities|about the company|about us|the position|job summary|job description|overview|the job|what you get|perks|your tasks|your duties|what does the job involve|what will you do|what will you be doing|ideal candidate|our ideal candidate|must have|should have|experience required|education|work environment|equal opportunity|eoe)[\s:]*$/i
+
+/**
+ * Normalise a raw job description to clean, readable plain text.
+ *
+ * Sources and what they return:
+ *   LinkedIn   — HTML with <ul>/<li>/<strong>/<p>/<br> etc.
+ *   Indeed     — HTML similar to LinkedIn
+ *   Greenhouse — HTML from their job board JSON API
+ *   Lever      — HTML
+ *   SerpAPI    — plain text, often one collapsed paragraph
+ *   Workday    — already-fetched markdown (enrichWorkdayDescriptions no longer runs)
+ *   career_page — markdown from website-content-crawler
+ *   rag-browser  — markdown
+ *
+ * Steps:
+ *   1. Decode HTML entities (&amp; &nbsp; etc.)
+ *   2. If HTML: convert structural tags → newlines/bullets, strip remaining tags
+ *   3. Normalize unicode bullet characters (•·▪▸–) → "- "
+ *   4. Re-inject newlines before section headers collapsed into one paragraph
+ *   5. Split "Header: content" inline → "Header\ncontent"
+ *   6. Collapse 3+ blank lines → 2, trim
+ */
+export function cleanDescription(raw: string): string {
+  if (!raw) return ''
+
+  // Step 1: Decode HTML entities
+  let text = raw
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g,  "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#160;/g, ' ')
+
+  // Step 2: HTML → plain text
+  if (/<[a-z][\s\S]*>/i.test(text)) {
+    text = text
+      // block-level breaks → newlines
+      .replace(/<br\s*\/?>/gi,        '\n')
+      .replace(/<\/p>/gi,             '\n')
+      .replace(/<\/div>/gi,           '\n')
+      .replace(/<\/h[1-6]>/gi,        '\n')
+      // list items → "- " bullets before stripping
+      .replace(/<li[^>]*>/gi,         '\n- ')
+      .replace(/<\/li>/gi,            '')
+      .replace(/<\/ul>|<\/ol>/gi,     '\n')
+      // inline bold → markdown bold
+      .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
+      .replace(/<b[^>]*>([\s\S]*?)<\/b>/gi,           '**$1**')
+      // strip all remaining tags
+      .replace(/<[^>]+>/g, '')
+  }
+
+  // Step 3: Normalize unicode bullet characters to "- "
+  // Use \*(?!\*) so we don't clobber markdown bold (**text**) that starts a line
+  text = text.replace(/^[•·▪▸–—]\s*/gm, '- ')
+  text = text.replace(/^\*(?!\*)\s*/gm, '- ')
+  // Clean up double-bullets from sources that put • inside <li> (e.g. Lever)
+  text = text.replace(/^(-\s+)[•·▪▸–—\*]\s*/gm, '$1')
+
+  // Step 4: Re-inject newlines before section headers that were collapsed into
+  // a single paragraph (e.g. "...experience required. Responsibilities Work on...")
+  text = text.replace(
+    /([.!?])\s+(What you[''']ll be doing|What we need to see|What we[''']re looking for|Ways to stand out from the crowd|Ways to stand out|About the role|About the team|About you|Responsibilities|Key responsibilities|Requirements|Qualifications|Preferred qualifications|Minimum qualifications|Basic qualifications|Additional qualifications|Nice to have|Bonus points|Benefits|Compensation|Who you are|The role|Your role|Your impact|Your background|Your qualifications|What you will do|What you[''']ll do|What you bring|What you[''']ll bring|You will|You have|You are|We offer|We provide|The team|Our team|What we offer|Why join us|What makes this role exciting|Location|The opportunity|Who we are|Your day to day|Day to day|You[''']ll be responsible for|Core responsibilities|About the company|About us|The position|Job summary|Overview|What you get|Perks|Your tasks|Your duties|Must have|Should have|Experience required|Education|Work environment|Equal opportunity)/gi,
+    '$1\n\n$2'
+  )
+
+  // Step 5: Split "Header: content on same line" → "Header\ncontent"
+  text = text.replace(
+    new RegExp('^(' + SECTION_HEADER_RE.source.slice(1, -2) + '):\\s+', 'gim'),
+    '$1\n'
+  )
+
+  // Step 6: Collapse 3+ blank lines → 2, normalize trailing whitespace, trim
+  text = text
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+$/gm, '')
+    .trim()
+
+  return text
+}
+
 function detectPhD(title: string, description: string): boolean {
   const text = `${title} ${description}`.toLowerCase()
   return /\bphd\b|\bdoctoral\b|\bpostdoc\b|\bfellowship\b|\bfunded position\b|\bdissertation\b/.test(text)
@@ -302,13 +565,11 @@ function extractSourceJobId(raw: RawApifyJob, source: string, url: string): stri
   // Source-specific named fields (actor output shapes vary by scraper)
   switch (source) {
     case 'linkedin': {
-      // curious_coder/linkedin-jobs-scraper exposes jobId as a top-level field
       const jobId = raw['jobId'] ?? raw['id']
       if (jobId) return s(jobId)
       break
     }
     case 'indeed': {
-      // misceres/indeed-scraper exposes jobKey
       const jobKey = raw['jobKey'] ?? raw['id']
       if (jobKey) return s(jobKey)
       break
@@ -316,7 +577,6 @@ function extractSourceJobId(raw: RawApifyJob, source: string, url: string): stri
     case 'greenhouse':
     case 'lever':
     case 'ashby': {
-      // ATS pages: requisitionId or id field from board JSON
       const reqId = raw['requisitionId'] ?? raw['id']
       if (reqId) return s(reqId)
       break
@@ -362,8 +622,6 @@ function parseSalaryMax(raw: string): number | null {
 }
 
 function normalizeJobType(raw: string): string {
-  // DB enum `job_type_enum` uses underscores: 'full_time', 'part_time', etc.
-  // Emitting hyphenated values ('full-time') crashes the jobs insert.
   const t = raw.toLowerCase()
   if (t.includes('contract'))    return 'contract'
   if (t.includes('part'))        return 'part_time'
@@ -385,8 +643,6 @@ function parsePostedDate(raw: string): string | null {
   const lower = raw.toLowerCase().trim()
   const now   = Date.now()
 
-  // Workday-style relative strings: "Posted Today", "Posted Yesterday",
-  // "Posted 3 Days Ago", "Posted 2+ Weeks Ago", "Posted 1 Month Ago"
   if (/posted today|posted just now/.test(lower)) {
     return new Date(now).toISOString()
   }
@@ -407,7 +663,6 @@ function parsePostedDate(raw: string): string | null {
     return d.toISOString()
   }
 
-  // Standard ISO / parseable date string fallback
   try {
     const d = new Date(raw)
     return isNaN(d.getTime()) ? null : d.toISOString()
@@ -417,20 +672,16 @@ function parsePostedDate(raw: string): string | null {
 }
 
 // ── metadata ──────────────────────────────────────────────────────────────────
-// Note: seniority, visa_sponsorship, skills_mentioned, and benefits are now
-// extracted by the Claude Haiku enrichment pass (lib/claude/enricher.ts) and
-// stored as first-class columns on the jobs table. Only applicant_count (from
-// LinkedIn API metadata) and years_required (used as a cheap pre-enrichment
-// heuristic for dedup) are retained here.
+// visa_sponsorship, security_clearance, work_mode, experience_years_min/max,
+// tech_stack, and benefits_highlights are now extracted as first-class fields
+// by the free extractors above. Only applicant_count (from LinkedIn metadata)
+// is retained here as pipeline-time metadata.
 
 function buildMetadata(
   _title: string,
   description: string,
   raw: RawApifyJob
 ): JobMetadata {
-  const years_required = parseYearsRequired(description)
-
-  // LinkedIn exposes applicants_count; map it through when present
   const rawApplicants = raw.applicants_count ?? raw.applicantsCount ?? raw.numApplicants
   const applicant_count =
     typeof rawApplicants === 'number' ? rawApplicants :
@@ -438,39 +689,17 @@ function buildMetadata(
     null
 
   const meta: JobMetadata = {}
-  if (years_required != null) meta.years_required   = years_required
   if (applicant_count != null) meta.applicant_count = applicant_count
   return meta
 }
 
-function parseYearsRequired(description: string): number | null {
-  if (!description) return null
-  // Match common patterns:
-  //   "5+ years of experience", "3-5 yrs", "at least 3 years",
-  //   "minimum of 5 years", "requires 3+ years"
-  const patterns = [
-    /\b(?:at\s+least|minimum\s+of|requires?|min\.?)\s+(\d{1,2})\+?\s*(?:years?|yrs?)\b/i,
-    /\b(\d{1,2})\+?\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp\.?)\b/i,
-    /\b(\d{1,2})\+?\s*(?:years?|yrs?)\b/i,
-  ]
-  for (const rx of patterns) {
-    const m = description.match(rx)
-    if (m) return parseInt(m[1], 10)
-  }
-  return null
-}
-
 /**
- * Pull salary numbers out of free-form description text. Handles:
- *   "$150,000 - $200,000"   "$150k-$200k"   "$150K-$200K"   "USD 120,000-180,000"
- *   "salary range $100k to $140k"    "$95/hr"
- * Returns the min (and optional max) in dollars, or null.
+ * Pull salary numbers out of free-form description text.
  */
 function parseSalaryFromDescription(description: string): { min: number; max: number | null } | null {
   if (!description) return null
-  const text = description.replace(/\u00a0/g, ' ')
+  const text = description.replace(/ /g, ' ')
 
-  // Pattern 1: $X - $Y (with optional k)
   const rangeK = text.match(/\$\s*(\d{2,3}(?:,\d{3})?)\s*([kK])?\s*(?:-|to)\s*\$?\s*(\d{2,3}(?:,\d{3})?)\s*([kK])?/)
   if (rangeK) {
     const min = toDollars(rangeK[1], rangeK[2])
@@ -478,7 +707,6 @@ function parseSalaryFromDescription(description: string): { min: number; max: nu
     if (min != null && max != null && max >= min && min >= 20_000) return { min, max }
   }
 
-  // Pattern 2: single "$Xk" or "$X,XXX"
   const single = text.match(/\$\s*(\d{2,3}(?:,\d{3})?)\s*([kK])?\b/)
   if (single) {
     const v = toDollars(single[1], single[2])
@@ -492,6 +720,5 @@ function toDollars(numStr: string, kSuffix?: string): number | null {
   const n = parseInt(numStr.replace(/,/g, ''), 10)
   if (isNaN(n)) return null
   if (kSuffix) return n * 1000
-  // Heuristic: a 2-digit number with no 'k' suffix is probably hourly/nonsense
   return n < 1000 ? n * 1000 : n
 }
