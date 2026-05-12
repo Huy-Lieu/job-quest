@@ -272,3 +272,23 @@ export function NewConfigForm({ onCreated, mode = 'create', initialValues, onSav
     </div>
   )
 }
+   <CardContent>{formBody}</CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <Button variant="outline" className="gap-2" onClick={() => setOpen((v) => !v)}>
+        <Plus className="h-4 w-4" /> New Config
+      </Button>
+      {open && (
+        <Card className="mt-4">
+          <CardHeader><CardTitle className="text-base">Create Search Config</CardTitle></CardHeader>
+          <CardContent>{formBody}</CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}

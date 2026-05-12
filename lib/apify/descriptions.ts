@@ -3,12 +3,12 @@
 // incomplete or empty job descriptions.
 //
 // Sources that need rag-web-browser (Chromium render):
-//   • Workday       — CXS listing API returns bulletFields[] only (~50-150 chars)
 //   • SmartRecruiters — listing API always returns description: ''
 //   • Workable      — listing API returns snippet only; full JD is on the detail page
 //   • Recruitee     — API can return truncated HTML; enriched when description < 500 chars
 //
 // Sources that do NOT need enrichment (full description already in actor output):
+//   • Workday       — shahidirfan/Workday-Job-Scraper returns description_text + description_html
 //   • LinkedIn      — scrapeJobDetails: true fetches full HTML
 //   • Indeed        — fetchJobDetails: true fetches full HTML
 //   • Greenhouse    — ?content=true API returns full HTML
@@ -29,14 +29,15 @@ const BATCH_SIZE = 3  // 3 concurrent × 8192MB = 24GB, safe under Apify free 32
 /**
  * Detect whether a job needs rag-web-browser description enrichment.
  * Returns true for:
- *   - Workday jobs (URL contains myworkdayjobs.com) — always
  *   - SmartRecruiters jobs (URL contains smartrecruiters.com) — always
  *   - Workable jobs (URL contains workable.com) — always
  *   - Recruitee jobs (source name is 'recruitee') — only when description < 500 chars
+ *
+ * Workday is explicitly excluded: shahidirfan/Workday-Job-Scraper already returns
+ * full description_text + description_html — enrichment would waste credits.
  */
 function needsEnrichment(job: NormalizedJob): boolean {
   const url = job.source.url ?? ''
-  if (url.includes('myworkdayjobs.com'))  return true
   if (url.includes('smartrecruiters.com')) return true
   if (url.includes('workable.com'))        return true
   if (job.source.name === 'recruitee' && job.description.length < 500) return true

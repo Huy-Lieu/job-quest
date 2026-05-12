@@ -94,53 +94,57 @@ export function resolveAtsSlugs(careerUrls: string[], targetCompanies: string[])
   return slugs
 }
 
-/** Known Workday tenants for common target companies (used when career_page_urls don't supply one). */
+/**
+ * Known Workday tenants for common target companies.
+ * Each entry is verified against the live myworkdayjobs.com URLs.
+ * Companies that do NOT use Workday (iCIMS, Oracle Fusion, Eightfold, Taleo, etc.) are omitted.
+ */
 export const KNOWN_WORKDAY: Record<string, WorkdayTenant> = {
   // Semiconductors / EDA
-  qualcomm:              { tenant: 'qualcomm',              dc: 'wd5', site: 'External' },
-  intel:                 { tenant: 'intel',                 dc: 'wd1', site: 'External' },
-  nvidia:                { tenant: 'nvidia',                dc: 'wd5', site: 'NVIDIAExternalCareerSite' },
-  amd:                   { tenant: 'amd',                   dc: 'wd1', site: 'AMD' },
-  synopsys:              { tenant: 'synopsys',              dc: 'wd1', site: 'Synopsys_Careers' },
-  cadence:               { tenant: 'cadence',               dc: 'wd1', site: 'External_Careers' },
-  infineon:              { tenant: 'infineon',              dc: 'wd3', site: 'Infineon' },
-  stmicroelectronics:    { tenant: 'stmicroelectronics',    dc: 'wd3', site: 'STMicroelectronics_Careers' },
-  nxp:                   { tenant: 'nxp',                   dc: 'wd1', site: 'nxp_External_Careers' },
-  broadcom:              { tenant: 'broadcom',              dc: 'wd1', site: 'External_Career_Site' },
-  marvell:               { tenant: 'marvell',               dc: 'wd5', site: 'External' },
-  microchip:             { tenant: 'microchiptechnology',   dc: 'wd1', site: 'External' },
-  onsemi:                { tenant: 'onsemi',                dc: 'wd1', site: 'ext' },
-  texasinstruments:      { tenant: 'texasinstruments',      dc: 'wd5', site: 'TICareerSite' },
+  qualcomm:              { tenant: 'qualcomm',    dc: 'wd12', site: 'External' },           // wd12 confirmed
+  intel:                 { tenant: 'intel',       dc: 'wd1',  site: 'External' },
+  nvidia:                { tenant: 'nvidia',      dc: 'wd5',  site: 'NVIDIAExternalCareerSite' },
+  // amd → uses iCIMS (careers.amd.com) — not Workday
+  // synopsys → uses Avature (synopsys.avature.net) — not Workday
+  cadence:               { tenant: 'cadence',     dc: 'wd1',  site: 'External_Careers' },
+  // infineon → uses jobs.infineon.com — not Workday
+  // stmicroelectronics → uses Eightfold AI — not Workday
+  nxp:                   { tenant: 'nxp',         dc: 'wd3',  site: 'careers' },             // was wd1/nxp_External_Careers
+  broadcom:              { tenant: 'broadcom',    dc: 'wd1',  site: 'External_Career' },     // was External_Career_Site
+  marvell:               { tenant: 'marvell',     dc: 'wd1',  site: 'MarvellCareers' },      // was wd5/External
+  microchip:             { tenant: 'microchiphr', dc: 'wd5',  site: 'External' },            // tenant is microchiphr, not microchiptechnology
+  // onsemi → uses Oracle Fusion (hctz.fa.us2.oraclecloud.com) — not Workday
+  // texasinstruments → uses careers.ti.com — not Workday
   // Automotive OEMs
-  ford:                  { tenant: 'ford',                  dc: 'wd10', site: 'Ford_Motor_Company_External' },
-  gm:                    { tenant: 'generalmotors',         dc: 'wd5',  site: 'Careers' },
-  'general motors':      { tenant: 'generalmotors',         dc: 'wd5',  site: 'Careers' },
-  stellantis:            { tenant: 'stellantis',            dc: 'wd3',  site: 'Stellantis' },
-  toyota:                { tenant: 'toyota',                dc: 'wd5',  site: 'TMNA_External' },
-  honda:                 { tenant: 'honda',                 dc: 'wd5',  site: 'HondaExternalJobBoard' },
+  // ford → uses Oracle Fusion (efds.fa.em5.oraclecloud.com) — not Workday
+  gm:                    { tenant: 'generalmotors', dc: 'wd5', site: 'Careers_GM' },         // was Careers
+  'general motors':      { tenant: 'generalmotors', dc: 'wd5', site: 'Careers_GM' },
+  stellantis:            { tenant: 'stellantis',  dc: 'wd3',  site: 'External_Career_Site_ID01' }, // was Stellantis
+  toyota:                { tenant: 'toyota',      dc: 'wd5',  site: 'TMNA' },               // was TMNA_External
+  // honda → uses careers.honda.com — not Workday
   // Automotive Tier-1 suppliers
-  continental:           { tenant: 'continental',           dc: 'wd3',  site: 'ContiCareer' },
-  aptiv:                 { tenant: 'aptiv',                 dc: 'wd5',  site: 'External' },
-  denso:                 { tenant: 'denso',                 dc: 'wd5',  site: 'DENSO_External' },
-  magna:                 { tenant: 'magna',                 dc: 'wd3',  site: 'Magna' },
-  borgwarner:            { tenant: 'borgwarner',            dc: 'wd5',  site: 'External' },
-  visteon:               { tenant: 'visteon',               dc: 'wd5',  site: 'External' },
-  harman:                { tenant: 'harman',                dc: 'wd5',  site: 'Samsung_Harman_External' },
-  bosch:                 { tenant: 'bosch',                 dc: 'wd3',  site: 'Bosch_Extern' },
-  valeo:                 { tenant: 'valeo',                 dc: 'wd3',  site: 'valeo_external' },
-  forvia:                { tenant: 'forvia',                dc: 'wd3',  site: 'FORVIA_External' },
+  // continental → uses SmartRecruiters (careers.smartrecruiters.com/continental) — not Workday
+  aptiv:                 { tenant: 'aptiv',       dc: 'wd5',  site: 'APTIV_CAREERS' },      // was External
+  // denso → uses Oracle Fusion (hcwt.fa.us2.oraclecloud.com) — not Workday
+  magna:                 { tenant: 'magna',       dc: 'wd3',  site: 'Magna' },
+  borgwarner:            { tenant: 'borgwarner',  dc: 'wd5',  site: 'BorgWarner_Careers' }, // was External
+  // visteon → no myworkdayjobs.com URL found — skipped
+  harman:                { tenant: 'harman',      dc: 'wd3',  site: 'HARMAN' },             // was wd5/Samsung_Harman_External
+  // bosch → uses jobs.bosch.com — not Workday
+  valeo:                 { tenant: 'valeo',       dc: 'wd3',  site: 'valeo_jobs' },         // was valeo_external
+  // forvia → unverified, skipped
   // Autonomous / AV
-  waymo:                 { tenant: 'waymo',                 dc: 'wd5',  site: 'waymo' },
-  mobileye:              { tenant: 'mobileye',              dc: 'wd3',  site: 'Mobileye_External_Career_Site' },
+  // waymo → uses careers.withwaymo.com — not Workday
+  // mobileye → uses careers.mobileye.com — not Workday
   // Defense / Aerospace
-  leidos:                { tenant: 'leidos',                dc: 'wd5',  site: 'External' },
-  l3harris:              { tenant: 'l3harris',              dc: 'wd5',  site: 'External' },
-  northropgrumman:       { tenant: 'northropgrumman',       dc: 'wd5',  site: 'Northrop_Grumman_External_Site' },
-  'northrop grumman':    { tenant: 'northropgrumman',       dc: 'wd5',  site: 'Northrop_Grumman_External_Site' },
-  rtx:                   { tenant: 'rtx',                   dc: 'wd5',  site: 'ExternalCareerSite' },
-  raytheon:              { tenant: 'rtx',                   dc: 'wd5',  site: 'ExternalCareerSite' },
-  baesystems:            { tenant: 'baesystems',            dc: 'wd5',  site: 'External_Career_Site' },
-  'bae systems':         { tenant: 'baesystems',            dc: 'wd5',  site: 'External_Career_Site' },
+  leidos:                { tenant: 'leidos',      dc: 'wd5',  site: 'External' },
+  // l3harris → uses careers.l3harris.com — not Workday
+  northropgrumman:       { tenant: 'ngc',         dc: 'wd1',  site: 'Northrop_Grumman_External_Site' }, // tenant is ngc, not northropgrumman
+  'northrop grumman':    { tenant: 'ngc',         dc: 'wd1',  site: 'Northrop_Grumman_External_Site' },
+  rtx:                   { tenant: 'globalhr',    dc: 'wd5',  site: 'REC_RTX_Ext_Gateway' }, // tenant is globalhr
+  raytheon:              { tenant: 'globalhr',    dc: 'wd5',  site: 'REC_RTX_Ext_Gateway' },
+  // baesystems → uses Taleo/BrassRing (jobs.baesystems.com) — not Workday
+  // 'bae systems' → same
 }
 
 export function resolveWorkdayTenants(_careerUrls: string[], targetCompanies: string[]): WorkdayTenant[] {
@@ -164,19 +168,72 @@ export function resolveWorkdayTenants(_careerUrls: string[], targetCompanies: st
   return [...out.values()]
 }
 
+/**
+ * Known Greenhouse slugs for companies that use Greenhouse as their ATS.
+ * These are fetched via the free Greenhouse JSON API (no Apify credits).
+ * Keyed by lowercased company name (both spaced and stripped forms where needed).
+ */
+export const KNOWN_GREENHOUSE: Record<string, string> = {
+  waymo:               'waymo',
+  aurora:              'aurora',
+  'applied intuition': 'appliedintuition',
+  appliedintuition:    'appliedintuition',
+}
+
+/**
+ * Known career page URLs for companies not on Workday or any supported ATS.
+ * These are scraped via the career_page source (Apify rag-web-browser).
+ * Keyed by lowercased company name.
+ */
+export const KNOWN_CAREER_PAGES: Record<string, string> = {
+  // Semiconductors — not on Workday
+  amd:               'https://careers.amd.com/careers-home/',
+  synopsys:          'https://careers.synopsys.com/',
+  infineon:          'https://jobs.infineon.com/careers',
+  stmicroelectronics:'https://stmicroelectronics.eightfold.ai/careers',
+  onsemi:            'https://www.onsemi.com/careers/search-for-careers-worldwide',
+  'texas instruments':'https://careers.ti.com/',
+  texasinstruments:  'https://careers.ti.com/',
+  // Automotive OEMs — not on Workday
+  ford:              'https://efds.fa.em5.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/jobs',
+  honda:             'https://careers.honda.com/us/en',
+  // Automotive Tier-1 — not on Workday
+  continental:       'https://jobs.continental.com/en/',
+  denso:             'https://densocareers.com/search/searchjobs',
+  visteon:           'https://www.visteon.com/careers/join-us/default.aspx',
+  // Defense — not on Workday
+  l3harris:          'https://careers.l3harris.com/en/search-jobs',
+  baesystems:        'https://jobs.baesystems.com/global/en/search-results',
+  'bae systems':     'https://jobs.baesystems.com/global/en/search-results',
+  // AV — not on Workday (Waymo + Aurora handled via Greenhouse above)
+  mobileye:          'https://careers.mobileye.com/jobs',
+}
+
+/**
+ * Resolve Greenhouse slugs for known companies.
+ * Returns slugs matching any of the given target companies.
+ * When targetCompanies is empty, returns all known slugs.
+ */
+export function resolveGreenhouseSlugs(targetCompanies: string[]): string[] {
+  if (!targetCompanies || targetCompanies.length === 0) {
+    return [...new Set(Object.values(KNOWN_GREENHOUSE))]
+  }
+  const seen = new Set<string>()
+  for (const c of targetCompanies) {
+    const key = c.toLowerCase().trim()
+    const slug = KNOWN_GREENHOUSE[key] ?? KNOWN_GREENHOUSE[key.replace(/\s+/g, '')]
+    if (slug) seen.add(slug)
+  }
+  return [...seen]
+}
+
 /** Map known company names to career page base URLs */
 export function getKnownCareerUrls(companies: string[]): string[] {
-  const knownUrls: Record<string, string> = {
-    nvidia:              'https://www.nvidia.com/en-us/about-nvidia/careers/',
-    qualcomm:            'https://www.qualcomm.com/company/careers',
-    intel:               'https://www.intel.com/content/www/us/en/jobs/jobs-at-intel.html',
-    amd:                 'https://www.amd.com/en/corporate/careers',
-    broadcom:            'https://www.broadcom.com/company/careers',
-    'applied intuition': 'https://www.appliedintuition.com/careers',
-    aurora:              'https://aurora.tech/careers',
-    waymo:               'https://waymo.com/careers/',
+  if (!companies || companies.length === 0) {
+    return Object.values(KNOWN_CAREER_PAGES)
   }
   return companies
-    .map(c => knownUrls[c.toLowerCase()])
+    .map(c => KNOWN_CAREER_PAGES[c.toLowerCase().trim()] ?? KNOWN_CAREER_PAGES[c.toLowerCase().trim().replace(/\s+/g, '')])
     .filter(Boolean) as string[]
 }
+

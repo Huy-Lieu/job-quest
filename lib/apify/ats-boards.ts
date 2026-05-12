@@ -401,3 +401,10 @@ export async function fetchRecruiteeBoard(slug: string): Promise<Record<string, 
     return []
   }
 }
+ed_at ?? null,
+      source_job_id:  j.id != null ? String(j.id) : null,
+    }))
+  } catch {
+    return []
+  }
+}

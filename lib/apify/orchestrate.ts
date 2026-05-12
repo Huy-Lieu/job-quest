@@ -9,6 +9,7 @@ import * as sources                       from './sources'
 import type { WorkdayTenant }             from './sources'
 import {
   buildAtsUrls, resolveAtsSlugs, resolveWorkdayTenants, getKnownCareerUrls,
+  resolveGreenhouseSlugs,
 } from './ats-resolver'
 
 /**
@@ -65,12 +66,19 @@ export async function orchestrateApify(config: SearchConfig): Promise<RawApifyJo
   console.log(`[apify/orchestrate] resolved workday tenants: ${JSON.stringify(workdayTenants)}`)
   const careerPageUrls = getKnownCareerUrls(config.target_companies)
 
+  // Merge KNOWN_GREENHOUSE slugs into the greenhouse ATS slug list so that
+  // companies like Waymo and Aurora (which use Greenhouse but not via slugified name)
+  // are always included without needing an explicit career_page URL.
+  const extraGreenhouseSlugs = resolveGreenhouseSlugs(config.target_companies)
+  const allGreenhouseSlugs   = [...new Set([...atsSlugs.greenhouse, ...extraGreenhouseSlugs])]
+  console.log(`[apify/orchestrate] greenhouse slugs: ${JSON.stringify(allGreenhouseSlugs)}`)
+
   // Build per-source options so each buildInput() gets the right targetUrls
   function optionsFor(sourceName: string) {
     switch (sourceName) {
       case 'greenhouse':
         return {
-          targetUrls:      buildAtsUrls('greenhouse', atsSlugs.greenhouse),
+          targetUrls:      buildAtsUrls('greenhouse', allGreenhouseSlugs),
           targetCompanies: config.target_companies,
         }
       case 'lever':

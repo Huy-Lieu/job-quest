@@ -7,7 +7,7 @@
 //   2b.Title relevance    — drop jobs with no keyword tokens in title (free; exempts URL-targeted sources)
 //   3. Dedup early        — Stage 1+2: source ID + hash (free, DB only)
 //   4. Location filter    — drop jobs outside config.locations (free)
-//   5. Desc enrichment    — rag-web-browser for full JD text (Workday, SmartRecruiters, Workable, Recruitee)
+//   5. Desc enrichment    — rag-web-browser for full JD text (SmartRecruiters, Workable, Recruitee — NOT Workday: actor returns full text)
 //   6. Dedup fuzzy        — free title-similarity check (no Claude)
 //   7. Store              — jobs + job_sources → Supabase
 //
