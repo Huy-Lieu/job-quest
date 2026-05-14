@@ -7,7 +7,7 @@
 //   2b.Title relevance    — drop jobs with no keyword tokens in title (free; exempts URL-targeted sources)
 //   3. Dedup early        — Stage 1+2: source ID + hash (free, DB only)
 //   4. Location filter    — drop jobs outside config.locations (free)
-//   5. Desc enrichment    — rag-web-browser for full JD text (SmartRecruiters, Workable, Recruitee — NOT Workday: actor returns full text)
+//   5. Desc enrichment    — rag-web-browser for full JD text (Workday, SmartRecruiters, Workable, Recruitee)
 //   6. Dedup fuzzy        — free title-similarity check (no Claude)
 //   7. Store              — jobs + job_sources → Supabase
 //
@@ -220,18 +220,34 @@ export async function runPipelineCore(
   const location   = config.locations?.[0] ?? 'United States'
   const serpOffset = config.serp_next_offset ?? 0
 
+  // Fetch user-added Workday registry entries from DB before scraping
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: registryRows } = await (supabaseAdmin as any)
+    .from('workday_registry')
+    .select('key, tenant, dc, site')
+    .eq('user_id', userId)
+  const userWorkdayEntries = Object.fromEntries(
+    ((registryRows ?? []) as { key: string; tenant: string; dc: string; site: string }[])
+      .map(r => [r.key, { tenant: r.tenant, dc: r.dc, site: r.site }])
+  )
+
   const [apifyRaw, serpResult] = await Promise.allSettled([
-    orchestrateApify(config),
+    orchestrateApify(config, userWorkdayEntries),
     config.serp_enabled
       ? searchGoogleJobs(query, location, 7, serpOffset)
       : Promise.resolve({ results: [], nextOffset: serpOffset }),
   ])
 
-  const apifyJobs = apifyRaw.status  === 'fulfilled' ? apifyRaw.value  : []
-  const serpData  = serpResult.status === 'fulfilled' ? serpResult.value : { results: [], nextOffset: serpOffset }
+  const apifyResult = apifyRaw.status === 'fulfilled' ? apifyRaw.value : { jobs: [], sourceErrors: {} }
+  const apifyJobs   = apifyResult.jobs
+  const serpData    = serpResult.status === 'fulfilled' ? serpResult.value : { results: [], nextOffset: serpOffset }
 
-  if (apifyRaw.status  === 'rejected') console.error('[pipeline] Apify failed:', apifyRaw.reason)
+  if (apifyRaw.status   === 'rejected') console.error('[pipeline] Apify failed:', apifyRaw.reason)
   if (serpResult.status === 'rejected') console.error('[pipeline] SerpAPI failed:', serpResult.reason)
+
+  if (Object.keys(apifyResult.sourceErrors).length > 0) {
+    await notify('warnings', { sourceErrors: apifyResult.sourceErrors })
+  }
 
   // ── Stage 2: Normalize ──────────────────────────────────────────────────────
   await notify('normalizing', { message: 'Normalizing results...' })

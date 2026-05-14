@@ -180,6 +180,25 @@ const COUNTRY_NAME_TO_CODE: Record<string, string> = {
   'vietnam': 'VN', 'viet nam': 'VN',
   'united arab emirates': 'AE', 'uae': 'AE',
   'south africa': 'ZA',
+  'malaysia': 'MY',
+  'prc': 'CN', 'mainland china': 'CN',
+  'hungary': 'HU',
+  'romania': 'RO',
+  'ukraine': 'UA',
+  'russia': 'RU', 'russian federation': 'RU',
+  'turkey': 'TR', 'türkiye': 'TR',
+  'thailand': 'TH',
+  'indonesia': 'ID',
+  'philippines': 'PH',
+  'pakistan': 'PK',
+  'egypt': 'EG',
+  'saudi arabia': 'SA',
+  'ireland': 'IE',
+  'new zealand': 'NZ',
+  'argentina': 'AR',
+  'colombia': 'CO',
+  'chile': 'CL',
+  'peru': 'PE',
 }
 
 /**
@@ -198,12 +217,16 @@ export function inferCountryCode(location: string): string {
 
   const loc = location.toLowerCase().trim()
 
-  // Remote — only return REMOTE if "remote" is the entire string or the primary
-  // location with no country context. Compound strings like "Remote, Germany"
-  // should fall through to the country-name check so the country code wins.
+  // Remote — return REMOTE when:
+  //   • "remote" is the entire string, or
+  //   • "remote" qualifies the whole listing: "Fully Remote", "Remote Only"
+  //   • "(Remote)" appears as a parenthetical suffix: "San Francisco, CA (Remote)"
+  // Compound strings like "Remote, Germany" fall through to the country-name check
+  // so the country code wins (the listing has a physical location AND is remote).
   if (/^remote$/.test(loc)) return 'REMOTE'
   if (/^remote\s+(only|work|jobs?)$/.test(loc)) return 'REMOTE'
   if (/^(fully |100%\s*)remote$/.test(loc)) return 'REMOTE'
+  if (/\(\s*remote\s*\)/.test(loc)) return 'REMOTE'
 
   // Multiple locations
   if (/^\d+\s+locations?$/.test(loc) || loc === 'multiple locations') return 'MULTI'

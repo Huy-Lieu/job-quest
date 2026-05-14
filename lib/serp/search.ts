@@ -14,8 +14,14 @@ export interface SerpSearchResult {
 /**
  * Fire the SerpAPI google_jobs engine for a query + location.
  *
+ * US-only intent: the caller (lib/pipeline/core.ts) always passes
+ * config.locations[0] ?? 'United States' as the location, so in practice
+ * this function is always called with a US location string. The `location`
+ * parameter is kept generic to avoid a hard-coded assumption here, but the
+ * pipeline is designed and tested for US-only job searching.
+ *
  * @param query    - Keywords to search, e.g. "embedded software engineer"
- * @param location - Location filter, e.g. "United States" or "Remote"
+ * @param location - Location filter; in practice always "United States" (see above)
  * @param daysAgo  - Recency filter: 1 = today, ≤7 = past week, else past month
  * @param offset   - Pagination cursor (serp_next_offset from search_configs). Defaults to 0.
  * @returns results array and the next cursor to persist back to search_configs.serp_next_offset

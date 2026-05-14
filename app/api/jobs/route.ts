@@ -10,19 +10,22 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { searchParams } = new URL(request.url)
-  const limit       = Math.min(parseInt(searchParams.get('limit')     ?? '20'), 50)
-  const offset      = parseInt(searchParams.get('offset')    ?? '0')
-  const minScore    = parseInt(searchParams.get('min_score') ?? '0')
-  const source      = searchParams.get('source')
-  const jobType     = searchParams.get('job_type')
-  const isPhD       = searchParams.get('phd')           // 'true' | 'false' | null
-  const recommended = searchParams.get('recommended')   // 'true' to filter recommended only
+  const limit          = Math.min(parseInt(searchParams.get('limit')     ?? '20'), 50)
+  const offset         = parseInt(searchParams.get('offset')    ?? '0')
+  const minScore       = parseInt(searchParams.get('min_score') ?? '0')
+  const source         = searchParams.get('source')
+  const jobType        = searchParams.get('job_type')
+  const isPhD          = searchParams.get('phd')           // 'true' | 'false' | null
+  const recommended    = searchParams.get('recommended')   // 'true' to filter recommended only
+  const workMode       = searchParams.get('work_mode')     // 'remote' | 'hybrid' | 'on-site' | ''
+  const visa           = searchParams.get('visa')          // 'yes' | 'no' | 'unknown' | ''
+  const locationSearch = searchParams.get('location')      // partial match against location string
 
   // ── Step 1: fetch all active jobs (with source + optional filters) ────────
   let jobsQuery = supabaseAdmin
     .from('jobs')
     .select(
-      'id, canonical_title, company, location, description, salary_min, salary_max, ' +
+      'id, canonical_title, company, location, country_code, description, salary_min, salary_max, ' +
       'salary_currency, job_type, employment_type, posted_at, scraped_at, is_phd, status, metadata, ' +
       'role_summary, skills_required, skills_preferred, tech_stack, work_mode, ' +
       'visa_sponsorship, experience_years_min, experience_years_max, education_level, ' +
@@ -33,8 +36,11 @@ export async function GET(request: Request) {
     .eq('status', 'active')
     .order('scraped_at', { ascending: false })
 
-  if (jobType) jobsQuery = jobsQuery.eq('job_type', jobType)
-  if (source)  jobsQuery = jobsQuery.eq('job_sources.source_name', source)
+  if (jobType)        jobsQuery = jobsQuery.eq('job_type', jobType)
+  if (source)         jobsQuery = jobsQuery.eq('job_sources.source_name', source)
+  if (workMode)       jobsQuery = jobsQuery.eq('work_mode', workMode)
+  if (visa)           jobsQuery = jobsQuery.eq('visa_sponsorship', visa)
+  if (locationSearch) jobsQuery = jobsQuery.ilike('location', `%${locationSearch}%`)
 
   // PhD handling:
   //  - ?phd=true  → only PhD jobs (used by /dashboard/phd)

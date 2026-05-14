@@ -1,8 +1,13 @@
 // lib/apify/search.ts
 // Core Apify actor runner - fires a run, polls until SUCCEEDED/FAILED, returns items.
-// Never throws. A failed or timed-out actor returns [] so the pipeline continues.
+// Never throws. A failed or timed-out actor returns { jobs: [], error } so the pipeline continues.
 
 import type { RawApifyJob } from '@/lib/types'
+
+export interface ApifyResult {
+  jobs:  RawApifyJob[]
+  error: string | null
+}
 
 const APIFY_TOKEN = process.env.APIFY_TOKEN
 
@@ -21,14 +26,14 @@ const DEFAULT_TIMEOUT_MS = 240_000  // abandon after 4 minutes
  * @param input     - Actor input object (shape varies per actor)
  * @param timeoutMs - Max ms to wait before abandoning the run (default: 4 minutes)
  */
-export async function runApifyActor(
+export async function runApifyActorWithError(
   actorId:   string,
   input:     object,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<RawApifyJob[]> {
+): Promise<ApifyResult> {
   if (!APIFY_TOKEN) {
     console.warn('[apify] APIFY_TOKEN is not set - skipping actor run:', actorId)
-    return []
+    return { jobs: [], error: 'APIFY_TOKEN is not set' }
   }
 
   // Apify REST API requires "username~actor-name" form
@@ -50,18 +55,17 @@ export async function runApifyActor(
 
     if (!startRes.ok) {
       const body = await startRes.text().catch(() => '')
-      console.warn(
-        '[apify] Actor start failed (' + actorId + '): ' +
-        startRes.status + ' ' + startRes.statusText + ' -- ' + body.slice(0, 300)
-      )
-      return []
+      const msg = `Actor start failed (${actorId}): ${startRes.status} ${startRes.statusText} -- ${body.slice(0, 200)}`
+      console.warn('[apify]', msg)
+      return { jobs: [], error: msg }
     }
 
     const { data: run } = await startRes.json() as { data: { id: string } }
     runId = run.id
   } catch (err) {
-    console.warn('[apify] Network error starting actor ' + actorId + ':', (err as Error).message)
-    return []
+    const msg = `Network error starting actor ${actorId}: ${(err as Error).message}`
+    console.warn('[apify]', msg)
+    return { jobs: [], error: msg }
   }
 
   // Step 2: Poll for completion every 5 seconds
@@ -93,19 +97,31 @@ export async function runApifyActor(
     }
 
     if (runStatus === 'SUCCEEDED') {
-      return fetchDatasetItems(defaultDatasetId)
+      const jobs = await fetchDatasetItems(defaultDatasetId)
+      return { jobs, error: null }
     }
 
     if (runStatus === 'FAILED' || runStatus === 'ABORTED' || runStatus === 'TIMED-OUT') {
-      console.warn('[apify] Run ' + runId + ' ended with status ' + runStatus + ' (actor: ' + actorId + ')')
-      return []
+      const msg = `Run ${runId} ended with status ${runStatus} (actor: ${actorId})`
+      console.warn('[apify]', msg)
+      return { jobs: [], error: msg }
     }
 
     // RUNNING / READY - keep polling
   }
 
-  console.warn('[apify] Run ' + runId + ' timed out after ' + timeoutMs + 'ms (actor: ' + actorId + ') - abandoning')
-  return []
+  const msg = `Run ${runId} timed out after ${timeoutMs}ms (actor: ${actorId})`
+  console.warn('[apify]', msg)
+  return { jobs: [], error: msg }
+}
+
+/** Legacy wrapper — returns [] on failure; used by callers that don't need error strings. */
+export async function runApifyActor(
+  actorId:   string,
+  input:     object,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<RawApifyJob[]> {
+  return (await runApifyActorWithError(actorId, input, timeoutMs)).jobs
 }
 
 // Fetch all items from a completed Apify dataset.

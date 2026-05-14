@@ -1,45 +1,42 @@
 // lib/apify/descriptions.ts
-// Post-filter description enrichment for sources whose listing APIs return
-// incomplete or empty job descriptions.
+// Post-filter description enrichment for sources whose APIs return incomplete
+// job descriptions that cannot be resolved via a free JSON detail endpoint.
 //
-// Sources that need rag-web-browser (Chromium render):
-//   • SmartRecruiters — listing API always returns description: ''
-//   • Workable      — listing API returns snippet only; full JD is on the detail page
+// Sources that now return full descriptions WITHOUT rag-web-browser:
+//   • SmartRecruiters — upgraded to use public detail API (/v1/companies/{slug}/postings/{id})
+//   • Workable        — upgraded to use public widget API (?details=true single request)
+//   • Workday         — shahidirfan/Workday-Job-Scraper returns description_text + description_html
+//   • LinkedIn        — scrapeJobDetails: true fetches full HTML
+//   • Indeed          — fetchJobDetails: true fetches full HTML
+//   • Greenhouse      — ?content=true API returns full HTML
+//   • Lever           — descriptionPlain/description from JSON API is complete
+//   • Ashby           — descriptionHtml/descriptionPlain from JSON API is complete
+//
+// Remaining rag-web-browser trigger (Recruitee only):
 //   • Recruitee     — API can return truncated HTML; enriched when description < 500 chars
-//
-// Sources that do NOT need enrichment (full description already in actor output):
-//   • Workday       — shahidirfan/Workday-Job-Scraper returns description_text + description_html
-//   • LinkedIn      — scrapeJobDetails: true fetches full HTML
-//   • Indeed        — fetchJobDetails: true fetches full HTML
-//   • Greenhouse    — ?content=true API returns full HTML
-//   • Lever         — descriptionPlain/description from JSON API is complete
-//   • Ashby         — descriptionHtml/descriptionPlain from JSON API is complete
 //
 // Jobs are processed in parallel batches of 3.
 // 3 concurrent × 8192MB = 24GB — safely under the Apify free tier 32GB limit.
-// No cap on total jobs — all detected jobs are enriched, batch by batch.
+// Hard cap of MAX_ENRICHMENT_JOBS per run to stay safely inside the SSE 300s window.
 
 import { runApifyActor } from '@/lib/apify/search'
 import type { NormalizedJob } from '@/lib/pipeline/normalize'
 
 const SECTION_HEADERS_RE = /What you(?:'ll| will) be doing|What we need to see|What we(?:'re| are) looking for|Ways to stand out from the crowd|Ways to stand out|About the role|About the team|About you|Responsibilities|Requirements|Qualifications|Preferred qualifications|Nice to have|Bonus points|Benefits|Who you are|The role|Your impact|Your background|Minimum qualifications|Basic qualifications|Key responsibilities|What you will do|What you(?:'ll)? do|What you bring|You will|You have|We offer|We provide/gi
 
-const BATCH_SIZE = 3  // 3 concurrent × 8192MB = 24GB, safe under Apify free 32GB
+const BATCH_SIZE         = 3   // 3 concurrent × 8192MB = 24GB, safe under Apify free 32GB
+const MAX_ENRICHMENT_JOBS = 15  // safety cap: 5 batches × ~40s avg = ~200s, inside 300s SSE limit
 
 /**
  * Detect whether a job needs rag-web-browser description enrichment.
- * Returns true for:
- *   - SmartRecruiters jobs (URL contains smartrecruiters.com) — always
- *   - Workable jobs (URL contains workable.com) — always
- *   - Recruitee jobs (source name is 'recruitee') — only when description < 500 chars
  *
- * Workday is explicitly excluded: shahidirfan/Workday-Job-Scraper already returns
- * full description_text + description_html — enrichment would waste credits.
+ * SmartRecruiters and Workable are intentionally excluded here — both now
+ * fetch full descriptions directly via their public JSON APIs in ats-boards.ts,
+ * so rag-web-browser is no longer needed for them.
+ *
+ * Only Recruitee is enriched here, and only when its API returned a short stub.
  */
 function needsEnrichment(job: NormalizedJob): boolean {
-  const url = job.source.url ?? ''
-  if (url.includes('smartrecruiters.com')) return true
-  if (url.includes('workable.com'))        return true
   if (job.source.name === 'recruitee' && job.description.length < 500) return true
   return false
 }
@@ -126,19 +123,28 @@ export async function enrichDescriptions(
 
   if (targets.length === 0) return jobs
 
+  // Apply hard cap to guarantee we stay inside the SSE 300s window
+  const cappedTargets = targets.slice(0, MAX_ENRICHMENT_JOBS)
+  if (cappedTargets.length < targets.length) {
+    console.warn(
+      `[descriptions] capped at ${MAX_ENRICHMENT_JOBS} — skipping ${targets.length - cappedTargets.length} jobs` +
+      ` (they will be stored with their current description)`
+    )
+  }
+
   console.log(
-    `[descriptions] enriching ${targets.length} jobs in batches of ${BATCH_SIZE}`,
-    `(sources: ${[...new Set(targets.map(t => t.source))].join(', ')})`
+    `[descriptions] enriching ${cappedTargets.length} jobs in batches of ${BATCH_SIZE}`,
+    `(sources: ${[...new Set(cappedTargets.map(t => t.source))].join(', ')})`
   )
 
   const enriched = [...jobs]
   let enrichedCount = 0
 
   // Process in parallel batches of BATCH_SIZE
-  for (let b = 0; b < targets.length; b += BATCH_SIZE) {
-    const batch = targets.slice(b, b + BATCH_SIZE)
+  for (let b = 0; b < cappedTargets.length; b += BATCH_SIZE) {
+    const batch = cappedTargets.slice(b, b + BATCH_SIZE)
     const batchNum = Math.floor(b / BATCH_SIZE) + 1
-    const totalBatches = Math.ceil(targets.length / BATCH_SIZE)
+    const totalBatches = Math.ceil(cappedTargets.length / BATCH_SIZE)
     console.log(`[descriptions] batch ${batchNum}/${totalBatches}: jobs [${batch.map(t => t.i).join(', ')}]`)
 
     const results = await Promise.allSettled(

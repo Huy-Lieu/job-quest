@@ -56,6 +56,7 @@ export async function GET(request: Request) {
   // Run pipeline in background — response streams independently
   runStreamPipeline(userId, configId, emit, close).catch(err => {
     console.error('[search/stream] Unhandled pipeline error:', err)
+    emit('error', { message: err instanceof Error ? err.message : String(err) })
     close()
   })
 
@@ -118,6 +119,10 @@ async function runStreamPipeline(
 
   /** Emit SSE progress event and write to polling fallback column. */
   async function progress(stage: string, data: Record<string, unknown>) {
+    if (stage === 'warnings') {
+      emit('warnings', data)
+      return
+    }
     const payload = { stage, progress: STAGE_PROGRESS[stage] ?? 50, ...data }
     emit('progress', payload)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

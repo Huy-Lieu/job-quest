@@ -11,7 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 
 export default function LoginPage() {
   const router = useRouter()
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -22,7 +22,7 @@ export default function LoginPage() {
     setLoading(true)
 
     const result = await signIn('credentials', {
-      username,
+      email,
       password,
       redirect: false,
     })
@@ -30,7 +30,7 @@ export default function LoginPage() {
     setLoading(false)
 
     if (result?.error) {
-      setError('Invalid username or password. Please try again.')
+      setError('Invalid email or password. Please try again.')
     } else {
       router.push('/dashboard')
     }
@@ -53,15 +53,15 @@ export default function LoginPage() {
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
-                id="username"
-                type="text"
-                placeholder="your username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
-                autoComplete="username"
+                autoComplete="email"
                 autoFocus
               />
             </div>

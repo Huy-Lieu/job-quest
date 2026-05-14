@@ -14,8 +14,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Hash password with bcrypt (10 rounds)
-    const passwordHash = await bcrypt.hash(password, 10)
+    // Hash password with bcrypt (12 rounds)
+    const passwordHash = await bcrypt.hash(password, 12)
 
     // Insert user into database
     const { data: user, error } = await supabaseAdmin

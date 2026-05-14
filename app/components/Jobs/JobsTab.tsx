@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -21,6 +21,9 @@ interface JobsTabProps {
   source:          string
   jobType:         string
   recommendedOnly: boolean
+  workMode:        string
+  visaOnly:        boolean
+  locationSearch:  string
   selectedIds:     Set<string>
   bulkDeleting:    boolean
   activeJobId:     string | null
@@ -31,6 +34,9 @@ interface JobsTabProps {
   setSource:       (v: string) => void
   setJobType:      (v: string) => void
   setRecommendedOnly: (v: boolean) => void
+  setWorkMode:     (v: string) => void
+  setVisaOnly:     (v: boolean) => void
+  setLocationSearch: (v: string) => void
   fetchJobs:       (offset?: number, append?: boolean) => void
   openJob:         (id: string) => void
   closeJobMobile:  () => void
@@ -44,13 +50,25 @@ interface JobsTabProps {
 export function JobsTab({
   jobs, total, offset, loadingJobs, jobsError,
   minScore, source, jobType, recommendedOnly,
+  workMode, visaOnly, locationSearch,
   selectedIds, bulkDeleting, activeJobId, detailOpenMobile, hasConfigs, LIMIT,
   setMinScore, setSource, setJobType, setRecommendedOnly,
+  setWorkMode, setVisaOnly, setLocationSearch,
   fetchJobs, openJob, closeJobMobile, toggleSelect, clearSelection,
   deleteOne, deleteBulk, setTab,
 }: JobsTabProps) {
   const activeJob = activeJobId ? jobs.find((j) => j.id === activeJobId) ?? null : null
   const [listCollapsed, setListCollapsed] = useState(false)
+
+  // Debounce location search — 300ms after last keystroke
+  const [locationInput, setLocationInput] = useState(locationSearch)
+  const locationDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleLocationInput = useCallback((val: string) => {
+    setLocationInput(val)
+    if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current)
+    locationDebounceRef.current = setTimeout(() => setLocationSearch(val), 300)
+  }, [setLocationSearch])
+  useEffect(() => () => { if (locationDebounceRef.current) clearTimeout(locationDebounceRef.current) }, [])
 
   // Company intel cache — keyed by job ID, persists across job selections this session
   const [intelCache, setIntelCache] = useState<Map<string, FetchedIntel>>(new Map())
@@ -83,6 +101,23 @@ export function JobsTab({
           <input type="checkbox" checked={recommendedOnly} onChange={(e) => setRecommendedOnly(e.target.checked)} className="rounded" />
           Recommended
         </label>
+        <select className="border rounded-md px-2 py-1 text-xs bg-background" value={workMode} onChange={(e) => setWorkMode(e.target.value)}>
+          <option value="">Any work mode</option>
+          <option value="remote">Remote</option>
+          <option value="hybrid">Hybrid</option>
+          <option value="on-site">On-site</option>
+        </select>
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+          <input type="checkbox" checked={visaOnly} onChange={(e) => setVisaOnly(e.target.checked)} className="rounded" />
+          Visa sponsor
+        </label>
+        <input
+          type="text"
+          placeholder="Location…"
+          value={locationInput}
+          onChange={(e) => handleLocationInput(e.target.value)}
+          className="border rounded-md px-2 py-1 text-xs bg-background w-28"
+        />
         <Button variant="ghost" size="sm" className="ml-auto gap-1 text-xs" onClick={() => fetchJobs(0)} disabled={loadingJobs}>
           <RefreshCw className={`h-3 w-3 ${loadingJobs ? 'animate-spin' : ''}`} /> Refresh
         </Button>

@@ -28,6 +28,9 @@ export default function JobsPage() {
   const [source, setSource]                   = useState('')
   const [jobType, setJobType]                 = useState('')
   const [recommendedOnly, setRecommendedOnly] = useState(false)
+  const [workMode, setWorkMode]               = useState('')
+  const [visaOnly, setVisaOnly]               = useState(false)
+  const [locationSearch, setLocationSearch]   = useState('')
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
@@ -63,13 +66,16 @@ export default function JobsPage() {
       if (source)          p.set('source', source)
       if (jobType)         p.set('job_type', jobType)
       if (recommendedOnly) p.set('recommended', 'true')
+      if (workMode)        p.set('work_mode', workMode)
+      if (visaOnly)        p.set('visa', 'yes')
+      if (locationSearch)  p.set('location', locationSearch)
       const res  = await fetch(`/api/jobs?${p}`)
       const data = await res.json()
       if (!res.ok) { setJobsError(data.error ?? 'Failed to load jobs'); return }
       setTotal(data.total ?? 0); setOffset(newOffset)
       setJobs((prev) => append ? [...prev, ...(data.jobs ?? [])] : (data.jobs ?? []))
     } finally { setLoadingJobs(false) }
-  }, [minScore, source, jobType, recommendedOnly])
+  }, [minScore, source, jobType, recommendedOnly, workMode, visaOnly, locationSearch])
 
   const fetchConfigs = useCallback(async () => {
     setLoadingConfigs(true)
@@ -148,14 +154,25 @@ export default function JobsPage() {
           toast.error(`Search failed: ${(d as { error?: string }).error ?? 'Unknown error'}`, { id: tid, duration: 6000 })
           return true // done, don't retry
         }
-        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ''
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ''; let currentEvent = 'message'
         while (true) {
           const { done, value } = await reader.read(); if (done) break
           buf += dec.decode(value, { stream: true })
           const lines = buf.split('\n'); buf = lines.pop() ?? ''
           for (const line of lines) {
+            if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); continue }
+            if (line === '') { currentEvent = 'message'; continue }
             if (!line.startsWith('data: ')) continue
             try {
+              if (currentEvent === 'warnings') {
+                const wd = JSON.parse(line.slice(6)) as { sourceErrors?: Record<string, string> }
+                const errs = Object.entries(wd.sourceErrors ?? {})
+                if (errs.length > 0) {
+                  const msg = errs.map(([src, err]) => `${src}: ${err}`).join('\n')
+                  toast.warning('Some sources had issues', { description: msg, duration: 8000 })
+                }
+                continue
+              }
               const pl = JSON.parse(line.slice(6)) as { stage?: string; found?: number; unique?: number; jobsAdded?: number; message?: string }
               if (pl.stage === 'complete') {
                 toast.success(`Done — ${pl.found ?? 0} found · ${pl.jobsAdded ?? 0} new`, { id: tid, duration: 5000 })
@@ -214,7 +231,7 @@ export default function JobsPage() {
   useEffect(() => { fetchJobs(0) },   [fetchJobs])
   useEffect(() => { fetchConfigs() }, [fetchConfigs])
   useEffect(() => { fetchRuns() },    [fetchRuns])
-  useEffect(() => { fetchJobs(0) },   [minScore, source, jobType, recommendedOnly, fetchJobs])
+  useEffect(() => { fetchJobs(0) },   [minScore, source, jobType, recommendedOnly, workMode, visaOnly, locationSearch, fetchJobs])
   useEffect(() => {
     if (!hasServerRunning) return
     const t = setInterval(() => { fetchRuns(); fetchJobs(0) }, 5000)
@@ -279,9 +296,11 @@ export default function JobsPage() {
         <JobsTab
           jobs={jobs} total={total} offset={offset} loadingJobs={loadingJobs} jobsError={jobsError}
           minScore={minScore} source={source} jobType={jobType} recommendedOnly={recommendedOnly}
+          workMode={workMode} visaOnly={visaOnly} locationSearch={locationSearch}
           selectedIds={selectedIds} bulkDeleting={bulkDeleting} activeJobId={activeJobId}
           detailOpenMobile={detailOpenMobile} hasConfigs={configs.length > 0} LIMIT={LIMIT}
           setMinScore={setMinScore} setSource={setSource} setJobType={setJobType} setRecommendedOnly={setRecommendedOnly}
+          setWorkMode={setWorkMode} setVisaOnly={setVisaOnly} setLocationSearch={setLocationSearch}
           fetchJobs={fetchJobs} openJob={openJob} closeJobMobile={closeJobMobile}
           toggleSelect={toggleSelect} clearSelection={clearSelection} deleteOne={deleteOne}
           deleteBulk={deleteBulk} setTab={setTab}

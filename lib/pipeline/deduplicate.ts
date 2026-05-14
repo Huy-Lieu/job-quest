@@ -37,48 +37,71 @@ function titlesAreSimilar(a: string, b: string): boolean {
 }
 
 // ── Stage 1 + 2: cheap DB deduplication ──────────────────────────────────────
+//
+// Previously this ran 2 DB queries per job (serial N+1 loop).
+// Now it runs exactly 2 bulk IN queries for the entire batch, then filters
+// in memory — O(1) DB round-trips regardless of input size.
 
 export async function deduplicateEarly(
   jobs: NormalizedJob[]
 ): Promise<NormalizedJob[]> {
+  if (jobs.length === 0) return []
+
+  // ── Step 1: compute hashes for all jobs upfront ───────────────────────────
+  const withHashes = jobs.map(job => ({ job, hash: hashJob(job) }))
+
+  // ── Step 2: bulk-fetch known source IDs in one query ─────────────────────
+  // Collect all (source_name, source_job_id) pairs that have a source_job_id
+  const sourceIdPairs = withHashes
+    .filter(({ job }) => job.source.source_job_id && job.source.name)
+    .map(({ job }) => job.source.source_job_id as string)
+
+  const knownSourceIds = new Set<string>()  // key: "sourceName::sourceJobId"
+
+  if (sourceIdPairs.length > 0) {
+    const { data: existingSources } = await supabaseAdmin
+      .from('job_sources')
+      .select('source_name, source_job_id')
+      .in('source_job_id', sourceIdPairs)
+
+    for (const row of existingSources ?? []) {
+      knownSourceIds.add(`${row.source_name}::${row.source_job_id}`)
+    }
+  }
+
+  // ── Step 3: bulk-fetch known hashes in one query ──────────────────────────
+  const allHashes = withHashes.map(({ hash }) => hash)
+
+  const { data: existingJobs } = await supabaseAdmin
+    .from('jobs')
+    .select('raw_hash')
+    .in('raw_hash', allHashes)
+
+  const knownHashes = new Set<string>((existingJobs ?? []).map(r => r.raw_hash))
+
+  // ── Step 4: single-pass in-memory filter ─────────────────────────────────
   const survivors: NormalizedJob[] = []
+  const batchHashes = new Set<string>()   // within-batch dedup
   let filteredBySourceId = 0
   let filteredByHash     = 0
 
-  for (const job of jobs) {
+  for (const { job, hash } of withHashes) {
+    // Stage 1: source ID exact match (DB)
     if (job.source.source_job_id && job.source.name) {
-      const { data: existing } = await supabaseAdmin
-        .from('job_sources')
-        .select('job_id')
-        .eq('source_name', job.source.name)
-        .eq('source_job_id', job.source.source_job_id)
-        .maybeSingle()
-
-      if (existing) {
+      const key = `${job.source.name}::${job.source.source_job_id}`
+      if (knownSourceIds.has(key)) {
         filteredBySourceId++
         continue
       }
     }
 
-    const hash = hashJob(job)
-
-    const { data: hashMatch } = await supabaseAdmin
-      .from('jobs')
-      .select('id')
-      .eq('raw_hash', hash)
-      .maybeSingle()
-
-    if (hashMatch) {
+    // Stage 2: hash match (DB or within this batch)
+    if (knownHashes.has(hash) || batchHashes.has(hash)) {
       filteredByHash++
       continue
     }
 
-    const withinBatchDup = survivors.some(j => j.raw_hash === hash)
-    if (withinBatchDup) {
-      filteredByHash++
-      continue
-    }
-
+    batchHashes.add(hash)
     survivors.push({ ...job, raw_hash: hash })
   }
 

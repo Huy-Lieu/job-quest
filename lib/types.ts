@@ -204,6 +204,7 @@ export interface JobWithScore {
   canonical_title:      string
   company:              string
   location:             string | null
+  country_code:         string | null
   description:          string | null
   salary_min:           number | null
   salary_max:           number | null

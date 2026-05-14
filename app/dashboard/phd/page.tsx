@@ -57,7 +57,6 @@ export default function PhDPage() {
         phd:       'true',
       })
       if (source)          params.set('source', source)
-      if (jobType)         params.set('job_type', jobType)
       if (recommendedOnly) params.set('recommended', 'true')
 
       const res  = await fetch(`/api/jobs?${params}`)
