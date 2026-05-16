@@ -1,0 +1,83 @@
+ATS Portal Research — Company Career Systems
+Researched: 2026-05-14
+Purpose: Reference for KNOWN_WORKDAY in lib/apify/ats-resolver.ts
+         Update this file whenever a company's ATS is verified or changes.
+
+=============================================================================
+CONFIRMED WORKDAY TENANTS (active, verified via live CXS API or search)
+=============================================================================
+
+Company             Tenant          DC      Site                            Notes
+-----------         ---------       ----    ----                            -----
+Intel               intel           wd1     External                        Confirmed OK
+NVIDIA              nvidia          wd5     NVIDIAExternalCareerSite        Confirmed OK
+Qualcomm            qualcomm        wd12    External                        Confirmed OK — migrated from wd5
+Cadence             cadence         wd1     External_Careers                Confirmed OK
+NXP                 nxp             wd3     careers                         Confirmed OK (was wd1/nxp_External_Careers)
+Broadcom            broadcom        wd1     External_Career                 Confirmed OK (was External_Career_Site)
+Marvell             marvell         wd1     MarvellCareers                  Confirmed OK (was wd5/External)
+Microchip Tech      microchiphr     wd5     External                        Confirmed OK (was microchiptechnology/wd1)
+GM / General Motors generalmotors   wd5     Careers_GM                      Confirmed OK (was Careers)
+Stellantis          stellantis      wd3     External_Career_Site_ID01       Confirmed via search (was Stellantis)
+Toyota (TMNA)       toyota          wd503   TMNA                            Confirmed OK (migrated from wd5/TMNA_External)
+Magna               magna           wd3     Magna_External                  Confirmed OK (was Magna)
+BorgWarner          borgwarner      wd5     BorgWarner_Careers              Confirmed OK (was External)
+Harman              harman          wd3     HARMAN                          Confirmed OK (was wd5/Samsung_Harman_External)
+Valeo               valeo           wd3     valeo_jobs                      Confirmed OK (was valeo_external)
+Leidos              leidos          wd5     External                        Confirmed OK
+Northrop Grumman    ngc             wd1     Northrop_Grumman_External_Site  Confirmed OK (was northropgrumman/wd5)
+RTX / Raytheon      globalhr        wd5     REC_RTX_Ext_Gateway             Confirmed OK (was rtx/ExternalCareerSite)
+
+=============================================================================
+UNVERIFIED WORKDAY TENANTS (still in KNOWN_WORKDAY, plausible but not tested)
+=============================================================================
+
+None — all tenants now confirmed or removed.
+
+=============================================================================
+COMPANIES THAT DO NOT USE WORKDAY (removed from KNOWN_WORKDAY)
+=============================================================================
+
+Company             ATS / Portal                                            Notes
+-----------         ------------                                            -----
+AMD                 careers.amd.com                                         Custom/Workday-like but separate domain
+Synopsys            synopsys.avature.net                                    Uses Avature ATS
+Infineon            jobs.infineon.com                                       Custom portal
+STMicroelectronics  stmicroelectronics.eightfold.ai                         Uses Eightfold AI
+Bosch               jobs.bosch.com                                          Custom portal
+Forvia (Faurecia)   jobs.faurecia.com                                       Custom portal
+Continental (auto)  careers.smartrecruiters.com/continental                 Uses SmartRecruiters
+DENSO               hcwt.fa.us2.oraclecloud.com (DENSO Career Connection)   Uses Oracle Cloud HCM
+Ford Motor Co       careers.ford.com                                        Custom portal
+Honda (NA)          careers.honda.com                                       Uses Phenom People ATS
+                                                                            Confirmed 2026-05-14: honda.wd5 tenant exists
+                                                                            but all site names return 422 — site name unknown,
+                                                                            main portal is careers.honda.com
+Visteon             visteon-panorama.darwinbox.com                          Uses Darwinbox ATS
+                                                                            Confirmed 2026-05-14 via visteon.com/careers
+Aptiv               aptiv.com/en/jobs                                       Custom portal
+Mobileye            careers.mobileye.com                                    Custom portal
+Waymo               waymo.com/careers                                       ATS unknown, no Workday URL found
+L3Harris            careers.l3harris.com                                    Custom portal
+BAE Systems         jobs.baesystems.com                                     Custom portal
+ON Semi             hctz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/  Uses Oracle Cloud HCM
+                    en/sites/CX_1001                                        Confirmed 2026-05-14: onsemi.wd1 tenant exists
+                                                                            but all site names return 422 — main portal Oracle
+Texas Instruments   careers.ti.com/en/sites/CX                             Uses Oracle Cloud HCM
+                                                                            Confirmed 2026-05-14: texasinstruments.wd5 tenant
+                                                                            exists but TICareerSite returns 422
+
+=============================================================================
+NOTES
+=============================================================================
+
+- Workday datacenters: wd1, wd3, wd5, wd10, wd12, wd503 seen in the wild.
+  wd503 is used by Toyota (migrated from wd5).
+  wd12 is used by Qualcomm (migrated from wd5).
+- honda.wd5 tenant is real (CXS endpoint responds 422, not 404) but the correct
+  site name is unknown. May be worth retrying with more site name guesses later.
+- Continental (automotive) should not be confused with Continental Resources (oil/gas)
+  which does use Workday at clr.wd5.myworkdayjobs.com/CLR_Careers.
+- Toyota also has a Canada portal: toyota.wd5.myworkdayjobs.com/Toyota_CA (wd5 still active for CA).
+- Harman is a Samsung subsidiary — old site was Samsung_Harman_External on wd5,
+  now confirmed HARMAN on wd3.

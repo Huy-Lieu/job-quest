@@ -142,4 +142,23 @@ See `.env.example`. Required:
 - `ANTHROPIC_API_KEY` — Claude Sonnet/Haiku (not used at search time)
 - `APIFY_TOKEN` — job scraping
 - `SERPAPI_KEY` — Google Jobs via `google_jobs` engine. Toggle per config via `serp_enabled`. Offset: `serp_next_offset` advances +10/run, resets when `results < 10` or offset ≥ `SERP_MAX_OFFSET = 50`.
-- `CRON_SE
+- `CRON_SECRET` — bearer token for `/api/cron/search`
+- `NEXT_PUBLIC_URL` + `NEXTAUTH_URL`
+
+## Rules & Constraints
+
+**File size:** Keep files under 300 lines. If a file would exceed this, split it — extract a logically coherent chunk into a new file and import it. Always verify the split compiles (`npx tsc --noEmit`) before committing.
+
+**No heredocs:** Do not use bash heredoc syntax (`<<EOF`) in shell commands. Write files directly.
+
+**Verify after writing:** After any file write or edit, confirm with `npx tsc --noEmit` that types still pass. Do not assume a write succeeded silently.
+
+**Import paths:** Use `@/` aliases (configured in `tsconfig.json`) for imports from `lib/` and `app/`. Relative imports only within the same directory.
+
+**next.config.ts:** `serverExternalPackages: ['pdf-parse', 'mammoth']` — required for PDF/DOCX parsing (Node.js `fs` dependency). Add new server-only file-system packages here.
+
+**Supabase admin client:** Never use the anon client for server-side writes. Import `supabaseAdmin` from `lib/supabase.ts` in all Route Handlers.
+
+**No Claude at search time:** Never add LLM calls inside `runPipelineCore` or any function it calls. Enrichment and scoring are on-demand only.
+
+**Resume storage:** Supabase Storage (`resumes` bucket), not Google Drive or iCloud. Path: `resumes/{userId}/master/` or `resumes/{userId}/applications/{jobId}/`. Store `storagePath` in `resume_versions`, not a Drive file ID.

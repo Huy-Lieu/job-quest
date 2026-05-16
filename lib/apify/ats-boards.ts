@@ -412,3 +412,69 @@ export async function fetchRecruiteeBoard(slug: string): Promise<Record<string, 
     return []
   }
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Oracle Cloud HCM — hcmRestApi/resources/latest/recruitingCEJobRequisitions
+// Companies confirmed on Oracle HCM: ON Semiconductor, Texas Instruments, DENSO
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OracleTenant {
+  host:    string   // e.g. 'hctz' (ON Semi) or 'hcwt' (TI)
+  dc:      string   // e.g. 'us2'
+  site:    string   // siteId param, e.g. 'CX_1001' or 'CX'
+  company: string   // human-readable company name for normalization
+}
+
+interface OracleJob {
+  Id?:               number | string
+  Title?:            string
+  PrimaryLocation?:  string
+  PostingStartDate?: string
+  ExternalDescriptionStr?: string
+  ShortDescriptionStr?: string
+  ExternalApplyURL?: string
+  RequisitionNumber?: string
+}
+
+export async function fetchOracleBoard(
+  t: OracleTenant,
+  query: string,
+  limit = 50,
+): Promise<Record<string, unknown>[]> {
+  const label = `${t.company} (${t.host}.${t.dc})`
+  try {
+    const base = `https://${t.host}.${t.dc}.oraclecloud.com`
+    const url  = `${base}/hcmRestApi/resources/latest/recruitingCEJobRequisitions`
+    const params = new URLSearchParams({
+      finder:  'findReqs',
+      siteId:  t.site,
+      keyword: query,
+      limit:   String(limit),
+    })
+    const fullUrl = `${url}?${params.toString()}`
+    console.log(`[oracle] → GET ${fullUrl}`)
+    const res = await fetch(fullUrl, { headers: { Accept: 'application/json' } })
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '')
+      console.warn(`[oracle] ✗ ${label} — HTTP ${res.status} | body: ${errBody.slice(0, 300)}`)
+      return []
+    }
+    console.log(`[oracle] ✓ ${label} — HTTP ${res.status}`)
+    const body = await res.json()
+    const items = (body.items ?? []) as OracleJob[]
+    console.log(`[oracle] ${label} — ${items.length} posting(s) returned`)
+    return items.map(j => ({
+      title:         j.Title ?? '',
+      company:       t.company,
+      location:      j.PrimaryLocation ?? 'Unknown',
+      url:           j.ExternalApplyURL ?? '',
+      description:   j.ExternalDescriptionStr ?? j.ShortDescriptionStr ?? '',
+      postedAt:      j.PostingStartDate ?? null,
+      source_job_id: j.RequisitionNumber ?? (j.Id != null ? String(j.Id) : null),
+    }))
+  } catch (err) {
+    console.error(`[oracle] ✗ ${label} — exception: ${err instanceof Error ? err.message : String(err)}`)
+    return []
+  }
+}

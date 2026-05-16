@@ -37,6 +37,7 @@ const MAX_ENRICHMENT_JOBS = 15  // safety cap: 5 batches × ~40s avg = ~200s, in
  * Only Recruitee is enriched here, and only when its API returned a short stub.
  */
 function needsEnrichment(job: NormalizedJob): boolean {
+  if (job.source.name === 'oracle') return false  // Oracle REST API returns full descriptions
   if (job.source.name === 'recruitee' && job.description.length < 500) return true
   return false
 }

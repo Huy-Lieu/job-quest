@@ -87,7 +87,7 @@ function filterByTitleRelevance(
   if (keywords.length === 0) return jobs
 
   // URL-targeted sources already scope results — don't filter them by title
-  const URL_TARGETED_SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workday', 'career_page', 'phd', 'recruitee', 'teamtailor', 'personio', 'smartrecruiters', 'workable'])
+  const URL_TARGETED_SOURCES = new Set(['greenhouse', 'lever', 'ashby', 'workday', 'oracle', 'career_page', 'phd', 'recruitee', 'teamtailor', 'personio', 'smartrecruiters', 'workable'])
 
   // Build the token pool — all meaningful tokens from all keyword phrases
   const tokenPool = new Set(keywords.flatMap(extractKeywordTokens))

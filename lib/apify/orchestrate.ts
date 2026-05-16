@@ -5,10 +5,10 @@
 import type { SearchConfig, RawApifyJob } from '@/lib/types'
 import { getEnabledSources }              from './sources'
 import { runApifyActorWithError }          from './search'
-import { fetchWorkdayBoard }              from './ats-boards'
-import type { WorkdayTenant }             from './ats-boards'
+import { fetchWorkdayBoard, fetchOracleBoard } from './ats-boards'
+import type { WorkdayTenant, OracleTenant }   from './ats-boards'
 import {
-  buildAtsUrls, resolveAtsSlugs, resolveWorkdayTenants, getKnownCareerUrls,
+  buildAtsUrls, resolveAtsSlugs, resolveWorkdayTenants, resolveOracleTenants, getKnownCareerUrls,
 } from './ats-resolver'
 
 export interface OrchestrateResult {
@@ -67,7 +67,9 @@ export async function orchestrateApify(
   const workdayTenants = resolveWorkdayTenants([], config.target_companies, userWorkdayEntries)
     .filter(t => !disabled.has(t.tenant.toLowerCase()))
   console.log(`[apify/orchestrate] resolved workday tenants: ${JSON.stringify(workdayTenants)}`)
-  const careerPageUrls = getKnownCareerUrls(config.target_companies)
+  const careerPageUrls  = getKnownCareerUrls(config.target_companies)
+  const oracleTenants   = resolveOracleTenants(config.target_companies)
+  console.log(`[apify/orchestrate] resolved oracle tenants: ${JSON.stringify(oracleTenants)}`)
 
   const allGreenhouseSlugs = atsSlugs.greenhouse
   console.log(`[apify/orchestrate] greenhouse slugs: ${JSON.stringify(allGreenhouseSlugs)}`)
@@ -104,6 +106,25 @@ export async function orchestrateApify(
         return Promise.allSettled(
           workdayTenants.map(t => fetchWorkdayBoard(t, workdayQuery, 50, workdayLocCode))
         ).then(results => {
+          const items: RawApifyJob[] = []
+          const tenantErrors: string[] = []
+          for (const r of results) {
+            if (r.status === 'fulfilled') items.push(...r.value as RawApifyJob[])
+            else tenantErrors.push(r.reason instanceof Error ? r.reason.message : String(r.reason))
+          }
+          const error = tenantErrors.length > 0 ? tenantErrors.join('; ') : null
+          return { source: source.label, items, error }
+        })
+      }
+      if (source.name === 'oracle') {
+        if (oracleTenants.length === 0) {
+          console.log('[apify/orchestrate] Oracle: no tenants resolved')
+          return Promise.resolve({ source: source.label, items: [] as RawApifyJob[], error: null })
+        }
+        console.log(`[apify/orchestrate] Oracle: querying ${oracleTenants.length} tenant(s)`)
+        return Promise.allSettled(
+          oracleTenants.map((t: OracleTenant) => fetchOracleBoard(t, workdayQuery, 50))
+        ).then((results: PromiseSettledResult<Record<string, unknown>[]>[]) => {
           const items: RawApifyJob[] = []
           const tenantErrors: string[] = []
           for (const r of results) {

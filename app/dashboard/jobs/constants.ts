@@ -18,6 +18,7 @@ export const SOURCE_LABELS: Record<SearchSourceName, string> = {
   ziprecruiter:    'ZipRecruiter',
   phd:             'PhD Board',
   workday:         'Workday',
+  oracle:          'Oracle HCM',
   smartrecruiters: 'SmartRecruiters',
   clearancejobs:   'ClearanceJobs',
   hn_hiring:       'HN Hiring',
@@ -41,6 +42,7 @@ export const SOURCE_COLORS: Record<SearchSourceName, string> = {
   ziprecruiter:    'bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300',
   phd:             'bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300',
   workday:         'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300',
+  oracle:          'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300',
   smartrecruiters: 'bg-violet-100 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300',
   clearancejobs:   'bg-slate-100 text-slate-700 dark:bg-slate-500/15 dark:text-slate-300',
   hn_hiring:       'bg-orange-100 text-orange-800 dark:bg-orange-500/15 dark:text-orange-200',
@@ -85,7 +87,7 @@ export const NOTICE_TONE_STYLES: Record<SourceNoticeTone, string> = {
 // ── Apply-source priority ─────────────────────────────────────────────────────
 
 export const APPLY_SOURCE_PRIORITY: SearchSourceName[] = [
-  'greenhouse', 'lever', 'ashby', 'workday', 'smartrecruiters', 'workable',
+  'greenhouse', 'lever', 'ashby', 'workday', 'oracle', 'smartrecruiters', 'workable',
   'teamtailor', 'recruitee', 'personio', 'career_page',
   'linkedin', 'wellfound', 'glassdoor', 'indeed', 'ziprecruiter',
   'google', 'hn_hiring', 'yc_waas', 'clearancejobs', 'phd',

@@ -239,7 +239,9 @@ export {
   fetchSmartRecruitersBoard,
   fetchWorkableBoard,
   fetchRecruiteeBoard,
+  fetchOracleBoard,
   type WorkdayTenant,
+  type OracleTenant,
 } from './ats-boards'
 
 export {

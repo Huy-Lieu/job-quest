@@ -30,5 +30,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "lib/apify/ats-boards-clean.ts", "lib/apify/ats-resolver-clean.ts", "lib/apify/orchestrate-clean.ts"]
 }

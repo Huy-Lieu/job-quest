@@ -164,6 +164,7 @@ export type SearchSourceName =
   | 'ziprecruiter'
   | 'phd'
   | 'workday'
+  | 'oracle'
   | 'smartrecruiters'
   | 'clearancejobs'
   | 'hn_hiring'
