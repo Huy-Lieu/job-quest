@@ -223,21 +223,10 @@ function normalizeWorkdayLocation(raw: string | undefined): string {
   return trimmed
 }
 
-// ISO country code → Workday locationCountry facet value
-const WORKDAY_LOCATION_FACET: Record<string, string> = {
-  US: 'United States of America', GB: 'United Kingdom', CA: 'Canada',
-  AU: 'Australia', DE: 'Germany', FR: 'France', NL: 'Netherlands',
-  SE: 'Sweden', NO: 'Norway', DK: 'Denmark', FI: 'Finland',
-  CH: 'Switzerland', AT: 'Austria', BE: 'Belgium', ES: 'Spain',
-  PT: 'Portugal', IT: 'Italy', PL: 'Poland', IL: 'Israel',
-  IN: 'India', JP: 'Japan', SG: 'Singapore', BR: 'Brazil', MX: 'Mexico',
-}
-
 export async function fetchWorkdayBoard(
   t: WorkdayTenant,
   query: string,
   limit = 20,
-  locationCode?: string,
 ): Promise<Record<string, unknown>[]> {
   const label = `${t.tenant}/${t.site} (${t.dc})`
   try {
@@ -252,7 +241,7 @@ export async function fetchWorkdayBoard(
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
-        body: JSON.stringify({ appliedFacets: locationCode && WORKDAY_LOCATION_FACET[locationCode.toUpperCase()] ? { locationCountry: [WORKDAY_LOCATION_FACET[locationCode.toUpperCase()]] } : {}, limit, offset: 0, searchText: query }),
+        body: JSON.stringify({ appliedFacets: {}, limit, offset: 0, searchText: query }),
       }
     )
     if (!res.ok) {

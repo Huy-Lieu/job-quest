@@ -44,22 +44,6 @@ export async function orchestrateApify(
   const workdayQuery = bestWorkdayToken(keywords) || keywords[0] || ''
   console.log(`[apify/orchestrate] Workday query: "${workdayQuery}"`)
 
-  const LOCATION_TO_CODE: Record<string, string> = {
-    'united states': 'US', 'usa': 'US', 'us': 'US',
-    'united kingdom': 'GB', 'uk': 'GB',
-    'canada': 'CA', 'australia': 'AU', 'germany': 'DE',
-    'france': 'FR', 'netherlands': 'NL', 'sweden': 'SE',
-    'norway': 'NO', 'denmark': 'DK', 'finland': 'FI',
-    'switzerland': 'CH', 'austria': 'AT', 'belgium': 'BE',
-    'spain': 'ES', 'portugal': 'PT', 'italy': 'IT',
-    'poland': 'PL', 'israel': 'IL', 'india': 'IN',
-    'japan': 'JP', 'singapore': 'SG', 'brazil': 'BR', 'mexico': 'MX',
-  }
-  const firstLocation  = (config.locations ?? [])[0]
-  const workdayLocCode = firstLocation
-    ? (LOCATION_TO_CODE[firstLocation.toLowerCase().trim()] ?? undefined)
-    : undefined
-
   console.log(`[apify/orchestrate] target_companies: ${JSON.stringify(config.target_companies)}`)
   console.log(`[apify/orchestrate] workday_disabled: ${JSON.stringify(config.workday_disabled)}`)
   const atsSlugs       = resolveAtsSlugs([], config.target_companies)
@@ -104,7 +88,7 @@ export async function orchestrateApify(
         }
         console.log(`[apify/orchestrate] Workday: querying ${workdayTenants.length} tenant(s) via CXS API`)
         return Promise.allSettled(
-          workdayTenants.map(t => fetchWorkdayBoard(t, workdayQuery, 50, workdayLocCode))
+          workdayTenants.map(t => fetchWorkdayBoard(t, workdayQuery, 50))
         ).then(results => {
           const items: RawApifyJob[] = []
           const tenantErrors: string[] = []
